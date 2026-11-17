@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AstroSite — Observing-site coordinates for astrophotography</title>
+  <meta name="description" content="Find any place on a map and copy its latitude, longitude and elevation in every format N.I.N.A., ASTAP, PixInsight, Siril, Stellarium, KStars/INDI, ASCOM, LX200/OnStep and FITS headers expect.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='13' fill='none' stroke='%237fb3ff' stroke-width='2'/><path d='M16 3v26M3 16h26' stroke='%237fb3ff' stroke-width='1.5'/><circle cx='16' cy='16' r='3' fill='%23ffcc66'/></svg>">
+  <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="13"/><path d="M16 3v26M3 16h26"/><circle class="dot" cx="16" cy="16" r="3"/></svg>
+      <div>
+        <h1>AstroSite</h1>
+        <p>Observing-site coordinates for astrophotography software</p>
+      </div>
+    </div>
+    <form class="search" id="searchForm" autocomplete="off" role="search">
+      <input id="searchInput" type="search" placeholder="Place name, address, or coordinates — e.g. 43.589, -79.644 · 43°35′20″N 79°38′38″W · FN03eo" aria-label="Search place or coordinates">
+      <button type="submit" class="btn primary">Go</button>
+      <button type="button" class="btn icon" id="locateBtn" title="Use my current location" aria-label="Use my current location">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/><circle cx="12" cy="12" r="8" fill="none"/></svg>
+      </button>
+      <ul class="results" id="searchResults" role="listbox" hidden></ul>
+    </form>
+    <div class="top-actions">
+      <button class="btn ghost" id="nightBtn" title="Red night-vision mode" aria-pressed="false">Night mode</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="map-wrap">
+      <div id="map" aria-label="Map"></div>
+      <div class="map-hint" id="mapHint">Click the map or drag the marker to set the site</div>
+      <div class="cursor-readout" id="cursorReadout"></div>
+    </section>
+
+    <aside class="panel" id="panel">
+      <div class="site-head">
+        <div class="site-title">
+          <input id="siteName" type="text" value="" placeholder="Site name" aria-label="Site name">
+          <div class="site-sub" id="siteSub">Pick a location to begin</div>
+        </div>
+        <div class="elev-box">
+          <label for="elevInput">Elevation (m)</label>
+          <input id="elevInput" type="number" step="1" inputmode="decimal">
+          <span class="elev-src" id="elevSrc"></span>
+        </div>
+      </div>
+
+      <nav class="tabs" role="tablist">
+        <button role="tab" class="tab active" data-tab="values" aria-selected="true">All values</button>
+        <button role="tab" class="tab" data-tab="programs" aria-selected="false">By program</button>
+        <button role="tab" class="tab" data-tab="tonight" aria-selected="false">Tonight &amp; polar</button>
+      </nav>
+
+      <div class="tab-body" id="tab-values">
+        <div class="toolbar">
+          <span class="muted">Click any value to copy it</span>
+          <div class="toolbar-btns">
+            <button class="btn small" id="copyTsv">Copy table</button>
+            <button class="btn small" id="copyMd">Markdown</button>
+            <button class="btn small" id="dlJson">JSON</button>
+            <button class="btn small" id="copyLink">Share link</button>
+          </div>
+        </div>
+        <div id="valuesTable"></div>
+      </div>
+
+      <div class="tab-body" id="tab-programs" hidden>
+        <div class="toolbar"><span class="muted">Values formatted the way each program expects. Longitude is East-positive unless noted.</span></div>
+        <div id="programCards"></div>
+      </div>
+
+      <div class="tab-body" id="tab-tonight" hidden>
+        <div id="tonight"></div>
+      </div>
+
+      <footer class="panel-foot">
+        Map © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors ·
+        Search by <a href="https://nominatim.org" target="_blank" rel="noopener">Nominatim</a> ·
+        Elevation &amp; time zone by <a href="https://open-meteo.com" target="_blank" rel="noopener">Open-Meteo</a> (Copernicus DEM) ·
+        <a href="https://github.com/electroluminescent/astro-site-coords" target="_blank" rel="noopener">Source on GitHub</a>
+      </footer>
+    </aside>
+  </main>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <div class="night-filter" aria-hidden="true"></div>
+
+  <script src="vendor/leaflet/leaflet.js"></script>
+  <script src="vendor/suncalc/suncalc.js"></script>
+  <script src="js/astro.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
