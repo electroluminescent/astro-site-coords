@@ -477,7 +477,7 @@ body.night {
 }
 body.night ::selection { background: #660000; color: #ffd6d6; }
 body.night .leaflet-tile-pane,
-body.night .leaflet-lpPane-pane,
+body.night .leaflet-lp-pane,
 body.night .leaflet-overlay-pane,
 body.night .leaflet-marker-pane,
 body.night .sky-badge i,
