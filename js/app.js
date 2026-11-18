@@ -16,7 +16,7 @@
     'wind_speed_850hPa', 'wind_direction_850hPa', 'wind_speed_500hPa', 'wind_direction_500hPa',
     'wind_speed_300hPa', 'wind_direction_300hPa', 'wind_speed_200hPa'];
   const SM = window.SkyModel;
-  const APP_VERSION = '1.4.1';
+  const APP_VERSION = '1.5.0';
 
   const state = {
     lat: null, lon: null,
@@ -227,7 +227,7 @@
       state.utcOffset = meta.utc_offset_seconds;
       if (meta.hourly && meta.hourly.time) state.fc = buildForecast(meta, aq);
     }
-    if (wx.key) scheduleWx(0);
+    if (wxActive()) scheduleWx(0);
     renderAll();
   }
 
@@ -1349,7 +1349,7 @@
       }
     }
     renderHourDetail(hours[i]);
-    if (wx.key) scheduleWx(60);
+    if (wxActive()) scheduleWx(60);
     const nightBefore = lastNightKey;
     renderNightSummary(hours[i].t);
     if (lastNightKey !== nightBefore && !instant) animateIn($('#fcNight'));
@@ -1807,7 +1807,7 @@
   }));
   function applySmoothing(opts = {}) {
     if (map.hasLayer(lpLayer)) { lpSetOn(true); lpHQ.redraw(); }
-    if (wx.key) { if (opts.refetch) wx.grid = null; scheduleWx(0); }
+    if (wxActive()) { if (opts.refetch) wx.grid = null; scheduleWx(0); }
     if (state.fc && !$('#tab-tonight').hidden) {
       const sc = $('.fc-scroll'); const sl = sc ? sc.scrollLeft : 0;
       renderTonight();
@@ -2041,52 +2041,54 @@
   setInterval(() => { if (map.hasLayer(satGroup)) { const t = satTime(); satLayers.forEach((l) => { l.options.time = t; l.redraw(); }); } }, 10 * 60000);
 
   const WX_KEYS = ['cloud', 'cloudLow', 'cloudMid', 'cloudHigh', 'trans', 'see', 'fog', 'wind', 'gust', 'temp', 'dew', 'rh'];
-  const wx = { key: '', opacity: 0.65, vals: false, grid: null, overlay: null, labels: null, req: 0, manualTime: null, timer: 0, loading: false };
+  const WX_NAMES = { cloud: 'Cloud cover', cloudLow: 'Low cloud', cloudMid: 'Mid cloud', cloudHigh: 'High cloud', trans: 'Transparency', see: 'Seeing', fog: 'Mist / fog', wind: 'Wind', gust: 'Gusts', temp: 'Temperature', dew: 'Dew point', rh: 'Humidity' };
+  // keys: active forecast layers in the order they were switched on (last = top, carries value labels)
+  const wx = { keys: [], layers: new Map(), opacity: 0.65, vals: false, grid: null, labels: null, req: 0, manualTime: null, timer: 0, loading: false };
+  const wxActive = () => wx.keys.length > 0;
   try {
-    wx.key = localStorage.getItem('astrosite.wxLayer') || '';
+    const saved = JSON.parse(localStorage.getItem('astrosite.wxLayers') || 'null');
+    const legacy = localStorage.getItem('astrosite.wxLayer');
+    wx.keys = (Array.isArray(saved) ? saved : legacy ? [legacy] : []).filter((k) => WX_KEYS.includes(k));
     wx.opacity = parseFloat(localStorage.getItem('astrosite.wxOpacity')) || 0.65;
     wx.vals = localStorage.getItem('astrosite.wxVals') === '1';
   } catch (e) { /* ignore */ }
+  const saveWxKeys = () => { try { localStorage.setItem('astrosite.wxLayers', JSON.stringify(wx.keys)); localStorage.removeItem('astrosite.wxLayer'); } catch (e) { /* ignore */ } };
 
   const LayersControl = L.Control.extend({
     options: { position: 'topright' },
     onAdd() {
       const div = L.DomUtil.create('div', 'leaflet-bar lp-ctl wx-ctl');
-      const rowDefsForMap = () => rowDefs().filter((r) => WX_KEYS.includes(r.key));
       div.innerHTML = `
-        <button type="button" class="lp-toggle" data-lyr="lp" aria-pressed="false" title="Light-pollution atlas">Light pollution</button>
+        <div class="wx-sec">Map</div>
+        <button type="button" class="lyr" data-lyr="lp" aria-pressed="false" title="Light-pollution atlas">Light pollution</button>
         <div class="lp-extra" data-for="lp" hidden><input type="range" min="10" max="100" value="50" aria-label="Light-pollution opacity"><a href="${window.LightPollution.colorsUrl}" target="_blank" rel="noopener">key</a></div>
-        <button type="button" class="lp-toggle" data-lyr="sat" aria-pressed="false" title="Latest geostationary infrared imagery (about 40 min old)">Satellite clouds</button>
-        <div class="lp-extra" data-for="sat" hidden><input type="range" min="10" max="100" value="75" aria-label="Satellite opacity"></div>
-        <select class="wx-select" aria-label="Forecast overlay"><option value="">Forecast overlay: off</option></select>
+        <div class="wx-sec">Forecast <span class="muted">· selected hour</span></div>
+        <div class="wx-btns">${WX_KEYS.map((k) => `<button type="button" class="lyr" data-wx="${k}" aria-pressed="${wx.keys.includes(k)}"${k === 'cloud' ? ' title="At the current hour this shows live satellite infrared imagery"' : ''}>${WX_NAMES[k]}</button>`).join('')}</div>
         <div class="lp-extra" data-for="wx" hidden><input type="range" min="10" max="100" value="${Math.round(wx.opacity * 100)}" aria-label="Forecast overlay opacity"><label class="chk"><input type="checkbox" class="wx-vals" ${wx.vals ? 'checked' : ''}> values</label></div>`;
-      const sel = div.querySelector('.wx-select');
-      // labels are filled lazily (row definitions need a location for source links, so use a neutral copy)
-      const names = { cloud: 'Cloud cover', cloudLow: 'Low cloud', cloudMid: 'Mid cloud', cloudHigh: 'High cloud', trans: 'Transparency', see: 'Seeing', fog: 'Mist / fog', wind: 'Wind speed', gust: 'Wind gusts', temp: 'Temperature', dew: 'Dew point', rh: 'Humidity' };
-      WX_KEYS.forEach((k) => { const o = document.createElement('option'); o.value = k; o.textContent = names[k]; sel.appendChild(o); });
-      sel.value = wx.key;
-      void rowDefsForMap;
       L.DomEvent.disableClickPropagation(div);
       L.DomEvent.disableScrollPropagation(div);
       const extra = (k) => div.querySelector(`.lp-extra[data-for="${k}"]`);
-      const btn = (k) => div.querySelector(`[data-lyr="${k}"]`);
+      const lpBtn = div.querySelector('[data-lyr="lp"]');
       const setLp = (on) => {
         lpSetOn(on);
-        btn('lp').setAttribute('aria-pressed', on); extra('lp').hidden = !on;
+        lpBtn.setAttribute('aria-pressed', on); extra('lp').hidden = !on;
         try { localStorage.setItem('astrosite.lpmap', on ? '1' : '0'); } catch (e) { /* ignore */ }
       };
-      const setSat = (on) => {
-        if (on) { const t = satTime(); satLayers.forEach((l) => { l.options.time = t; }); satGroup.addTo(map); } else map.removeLayer(satGroup);
-        btn('sat').setAttribute('aria-pressed', on); extra('sat').hidden = !on;
-        try { localStorage.setItem('astrosite.sat', on ? '1' : '0'); } catch (e) { /* ignore */ }
-      };
-      btn('lp').addEventListener('click', () => setLp(!map.hasLayer(lpLayer)));
-      btn('sat').addEventListener('click', () => setSat(!map.hasLayer(satGroup)));
+      lpBtn.addEventListener('click', () => setLp(!map.hasLayer(lpLayer)));
       extra('lp').querySelector('input').addEventListener('input', (e) => { lpSetOpacity(e.target.value / 100); try { localStorage.setItem('astrosite.lpopacity', e.target.value); } catch (err) { /* ignore */ } });
-      extra('sat').querySelector('input').addEventListener('input', (e) => { satLayers.forEach((l) => l.setOpacity(e.target.value / 100)); try { localStorage.setItem('astrosite.satopacity', e.target.value); } catch (err) { /* ignore */ } });
+      div.querySelectorAll('[data-wx]').forEach((b) => b.addEventListener('click', () => {
+        const k = b.dataset.wx;
+        if (wx.keys.includes(k)) { wx.keys = wx.keys.filter((x) => x !== k); removeWxLayer(k); }
+        else wx.keys.push(k);
+        b.setAttribute('aria-pressed', wx.keys.includes(k));
+        extra('wx').hidden = !wxActive();
+        saveWxKeys();
+        scheduleWx(0);
+      }));
       extra('wx').querySelector('input[type=range]').addEventListener('input', (e) => {
         wx.opacity = e.target.value / 100;
-        if (wx.overlay) wx.overlay.setOpacity(wx.opacity);
+        wx.layers.forEach((L2) => { if (L2.overlay) L2.overlay.setOpacity(wx.opacity); });
+        satLayers.forEach((l) => l.setOpacity(Math.min(1, wx.opacity + 0.1)));
         try { localStorage.setItem('astrosite.wxOpacity', wx.opacity); } catch (err) { /* ignore */ }
       });
       extra('wx').querySelector('.wx-vals').addEventListener('change', (e) => {
@@ -2094,18 +2096,12 @@
         try { localStorage.setItem('astrosite.wxVals', wx.vals ? '1' : '0'); } catch (err) { /* ignore */ }
         renderWx();
       });
-      sel.addEventListener('change', () => {
-        wx.key = sel.value; extra('wx').hidden = !wx.key;
-        try { localStorage.setItem('astrosite.wxLayer', wx.key); } catch (err) { /* ignore */ }
-        scheduleWx(0);
-      });
-      extra('wx').hidden = !wx.key;
+      extra('wx').hidden = !wxActive();
       try {
         const lo = localStorage.getItem('astrosite.lpopacity'); if (lo) { extra('lp').querySelector('input').value = lo; lpSetOpacity(lo / 100); }
-        const so = localStorage.getItem('astrosite.satopacity'); if (so) { extra('sat').querySelector('input').value = so; satLayers.forEach((l) => l.setOpacity(so / 100)); }
         if (localStorage.getItem('astrosite.lpmap') === '1') setTimeout(() => setLp(true), 0);
-        if (localStorage.getItem('astrosite.sat') === '1') setTimeout(() => setSat(true), 0);
       } catch (e) { /* ignore */ }
+      if (wxActive()) setTimeout(() => scheduleWx(0), 0);
       return div;
     },
   });
@@ -2129,11 +2125,12 @@
     if (state.fc && state.fcSel != null && state.fc.hours[state.fcSel]) return state.fc.hours[state.fcSel].t.getTime();
     return wx.manualTime || floorHour(Date.now());
   }
+  const isNowHour = (t) => floorHour(t) === floorHour(Date.now());
   function scheduleWx(delay = 400) {
     clearTimeout(wx.timer);
     wx.timer = setTimeout(updateWx, delay);
   }
-  map.on('moveend', () => { if (wx.key) scheduleWx(600); });
+  map.on('moveend', () => { if (wxActive()) scheduleWx(600); });
 
   function viewCovered() {
     if (!wx.grid) return false;
@@ -2141,21 +2138,19 @@
   }
 
   async function updateWx() {
-    if (!wx.key) { clearWx(); return; }
+    if (!wxActive()) { clearWx(); return; }
     const t = floorHour(wxTime());
-    const needFetch = !viewCovered() || !wx.grid.times.includes(t);
-    if (!needFetch) { renderWx(); return; }
+    // Cloud cover alone at the current hour needs no forecast grid (live satellite)
+    const needGrid = wx.keys.some((k) => !(k === 'cloud' && isNowHour(t)));
+    if (!needGrid || (viewCovered() && wx.grid.times.includes(t))) { renderWx(); return; }
     const id = ++wx.req;
     wx.loading = true; renderCaption();
     try {
       const grid = await fetchWxGrid(t);
       if (id !== wx.req) return;
-      const prevShown = wx.shown;
       wx.grid = grid;
-      if (prevShown != null && grid.times.includes(prevShown)) wx.shownGrid = grid; // animate from the old hour on the new grid
-      else wx.shown = null;
     } catch (err) {
-      if (id === wx.req) toast(`Forecast overlay unavailable: ${err.message}`);
+      if (id === wx.req) { toast(`Forecast overlay unavailable: ${err.message}`); wx.grid = null; }
     } finally {
       if (id === wx.req) { wx.loading = false; renderWx(); }
     }
@@ -2214,21 +2209,26 @@
     return h;
   }
 
+  function removeWxLayer(k) {
+    markLayer(k, false);
+    const st = wx.layers.get(k);
+    if (st) { cancelAnimationFrame(st.anim || 0); if (st.overlay) map.removeLayer(st.overlay); wx.layers.delete(k); }
+    if (k === 'cloud') map.removeLayer(satGroup);
+  }
   function clearWx() {
-    cancelAnimationFrame(wx.anim || 0);
-    wx.shown = null;
-    if (wx.overlay) { map.removeLayer(wx.overlay); wx.overlay = null; }
+    [...wx.layers.keys()].forEach(removeWxLayer);
+    map.removeLayer(satGroup);
     if (wx.labels) { map.removeLayer(wx.labels); wx.labels = null; }
     wxCap.hidden = true;
   }
 
   function renderCaption() {
-    if (!wx.key) { wxCap.hidden = true; return; }
-    const def = rowDefsSafe().find((r) => r.key === wx.key);
+    if (!wxActive()) { wxCap.hidden = true; return; }
     const t = wxTime();
+    const names = wx.keys.map((k) => (k === 'cloud' && isNowHour(t) ? 'Cloud cover (live satellite)' : WX_NAMES[k]));
     const bar = [0, 0.25, 0.5, 0.75, 1].map((q) => `<i style="background:${shade(q, false).bg}"></i>`).join('');
     wxCap.innerHTML = `<button data-step="-1" title="Previous hour" aria-label="Previous hour">◀</button>
-      <span><b>${esc(def ? def.label : wx.key)}</b> · ${esc(state.tz ? `${fmtDay(new Date(t))} ${fmtTime(new Date(t))}` : localTime(new Date(t)))}${wx.loading ? ' · loading…' : ''}</span>
+      <span><b>${esc(names.join(' + '))}</b> · ${esc(state.tz ? `${fmtDay(new Date(t))} ${fmtTime(new Date(t))}` : localTime(new Date(t)))}${wx.loading ? ' · loading…' : ''}</span>
       <button data-step="1" title="Next hour" aria-label="Next hour">▶</button>
       <span class="scale" title="worse → better">${bar}</span>`;
     wxCap.hidden = false;
@@ -2257,7 +2257,7 @@
   // Values for every grid point at one forecast hour (cached per layer/units/theme)
   function wxField(ti, def) {
     const g = wx.grid;
-    const key = `${wx.key}|${ti}|${state.units}|${isNight() ? 'n' : 'd'}`;
+    const key = `${def.key}|${ti}|${state.units}|${isNight() ? 'n' : 'd'}`;
     g.cache = g.cache || new Map();
     if (g.cache.has(key)) return g.cache.get(key);
     const n = g.pts.length;
@@ -2265,7 +2265,7 @@
     g.pts.forEach((p, k) => {
       const h = wxHour(p, ti);
       const c = h ? def.cell(h) : { nodata: true };
-      if (c.nodata || c.q == null) { f.nd[k] = c.nodata ? 1 : 0; f.q[k] = 0.5; } else f.q[k] = c.q;
+      if (c.nodata || c.q == null) { f.nd[k] = 1; f.q[k] = 0.5; } else f.q[k] = c.q;
       f.lim[k] = c.lim ? 1 : 0;
       if (!c.nodata) f.labels.push({ p, html: c.html || esc(c.txt || '') });
     });
@@ -2316,46 +2316,84 @@
     ctx.putImageData(img, 0, 0);
   }
 
-  function ensureOverlay() {
+  function ensureOverlay(k, z) {
     const g = wx.grid;
     const hq = mapQuality === 'high';
     const W = hq ? g.cols * 10 : g.cols, H = hq ? g.rows * 10 : g.rows;
-    if (wx.overlay && (wx.overlay._canvas.width !== W || wx.overlay._canvas.height !== H)) { map.removeLayer(wx.overlay); wx.overlay = null; }
-    if (!wx.overlay) {
+    let st = wx.layers.get(k);
+    if (!st) { st = {}; wx.layers.set(k, st); }
+    if (st.overlay && (st.overlay._canvas.width !== W || st.overlay._canvas.height !== H)) { map.removeLayer(st.overlay); st.overlay = null; }
+    if (!st.overlay) {
       const cv = document.createElement('canvas');
       cv.width = W; cv.height = H;
       const ov = new CanvasOverlay('', g.bounds, { pane: 'wxPane', opacity: wx.opacity, className: 'wx-img', interactive: false });
       ov._canvas = cv;
-      wx.overlay = ov.addTo(map);
+      st.overlay = ov.addTo(map);
     } else {
-      wx.overlay.setBounds(g.bounds);
-      wx.overlay.setOpacity(wx.opacity);
+      st.overlay.setBounds(g.bounds);
+      st.overlay.setOpacity(wx.opacity);
+      if (!map.hasLayer(st.overlay)) st.overlay.addTo(map);
     }
-    return wx.overlay._canvas;
+    st.overlay._canvas.style.zIndex = String(z);
+    return st;
   }
 
   function drawLabels(f) {
     if (wx.labels) { map.removeLayer(wx.labels); wx.labels = null; }
-    if (!wx.vals) return;
+    if (!wx.vals || !f) return;
     wx.labels = L.layerGroup(f.labels.map(({ p, html }) => L.marker([p.lat, p.lon], {
       pane: 'wxPane', interactive: false, keyboard: false,
       icon: L.divIcon({ className: 'wx-lbl', html: `<span>${html}</span>`, iconSize: [36, 16], iconAnchor: [18, 8] }),
     }))).addTo(map);
   }
 
-  function renderWx() {
-    if (!wx.key) { clearWx(); return; }
-    renderCaption();
+  // Button state: red when the layer has no data at all for this view and hour
+  function markLayer(k, missing) {
+    const b = document.querySelector(`.wx-ctl [data-wx="${k}"]`);
+    if (b) { b.classList.toggle('nodata', !!missing); b.title = missing ? `${WX_NAMES[k]}: no data for this area and hour` : (k === 'cloud' ? 'At the current hour this shows live satellite infrared imagery' : ''); }
+  }
+  function emptyField() {
+    const n = wx.grid ? wx.grid.pts.length : 0;
+    return { q: new Float32Array(n).fill(0.5), lim: new Uint8Array(n), nd: new Uint8Array(n).fill(1), labels: [] };
+  }
+  function paintMissing(k, z) {
+    if (!wx.grid) { markLayer(k, true); return; }
+    const st = ensureOverlay(k, z);
+    cancelAnimationFrame(st.anim || 0);
+    paintField(st.overlay._canvas, emptyField());
+    st.shown = null;
+    markLayer(k, true);
+  }
+
+  function renderOneLayer(k, z, t, isTop) {
     const g = wx.grid;
-    if (!g) return;
-    const t = floorHour(wxTime());
+    const st0 = wx.layers.get(k);
+    // Cloud cover at the current hour: live satellite infrared instead of the forecast
+    if (k === 'cloud' && isNowHour(t)) {
+      if (st0) { cancelAnimationFrame(st0.anim || 0); if (st0.overlay) map.removeLayer(st0.overlay); st0.shown = null; }
+      if (!map.hasLayer(satGroup)) { const ts = satTime(); satLayers.forEach((l) => { l.options.time = ts; l.setOpacity(Math.min(1, wx.opacity + 0.1)); }); satGroup.addTo(map); }
+      if (isTop) drawLabels(null);
+      markLayer(k, false);
+      return;
+    }
+    if (k === 'cloud') map.removeLayer(satGroup);
+    if (!g) {
+      if (!wx.loading) {
+        // no data at all (request failed): clear any stale picture and flag the layer
+        const st = wx.layers.get(k);
+        if (st && st.overlay) { cancelAnimationFrame(st.anim || 0); map.removeLayer(st.overlay); st.overlay = null; st.shown = null; }
+        markLayer(k, true);
+      }
+      return;
+    }
     const ti = g.times.indexOf(t);
-    if (ti < 0) return;
-    const def = rowDefsSafe().find((r) => r.key === wx.key);
-    const cv = ensureOverlay();
-    cancelAnimationFrame(wx.anim || 0);
-    const from = wx.shown;
-    const fi = from != null && wx.shownGrid === g ? g.times.indexOf(from) : -1;
+    if (ti < 0) { paintMissing(k, z); if (isTop) drawLabels(null); return; }
+    const def = rowDefsSafe().find((r) => r.key === k);
+    const st = ensureOverlay(k, z);
+    const cv = st.overlay._canvas;
+    cancelAnimationFrame(st.anim || 0);
+    const from = st.shown;
+    const fi = from != null && st.shownGrid === g ? g.times.indexOf(from) : -1;
     const hours = Math.abs(ti - fi);
     if (mapQuality === 'high' && fi >= 0 && hours > 0 && hours <= 48) {
       // Progress the field through every hour between the two times, blending between consecutive hours
@@ -2364,30 +2402,40 @@
       const t0 = performance.now();
       const n = g.pts.length;
       const mix = { q: new Float32Array(n), lim: new Uint8Array(n), nd: new Uint8Array(n), labels: [] };
-      if (wx.labels) { map.removeLayer(wx.labels); wx.labels = null; }
+      if (isTop && wx.labels) { map.removeLayer(wx.labels); wx.labels = null; }
       const step = (now) => {
         const pr = Math.min(1, (now - t0) / duration);
         const e = pr < 0.5 ? 2 * pr * pr : 1 - Math.pow(-2 * pr + 2, 2) / 2; // ease in-out
-        const pos = fi + dir * e * hours;                                   // fractional hour index
+        const pos = fi + dir * e * hours;
         const a = Math.floor(pos), fr = pos - a;
         const fa = wxField(Math.max(0, Math.min(g.times.length - 1, a)), def);
         const fb = wxField(Math.max(0, Math.min(g.times.length - 1, a + 1)), def);
-        for (let k = 0; k < n; k++) {
-          mix.q[k] = fa.q[k] + (fb.q[k] - fa.q[k]) * fr;
-          mix.lim[k] = fr < 0.5 ? fa.lim[k] : fb.lim[k];
-          mix.nd[k] = fr < 0.5 ? fa.nd[k] : fb.nd[k];
+        for (let i = 0; i < n; i++) {
+          mix.q[i] = fa.q[i] + (fb.q[i] - fa.q[i]) * fr;
+          mix.lim[i] = fr < 0.5 ? fa.lim[i] : fb.lim[i];
+          mix.nd[i] = fr < 0.5 ? fa.nd[i] : fb.nd[i];
         }
         paintField(cv, mix);
-        if (pr < 1) wx.anim = requestAnimationFrame(step);
-        else { const f = wxField(ti, def); paintField(cv, f); drawLabels(f); }
+        if (pr < 1) st.anim = requestAnimationFrame(step);
+        else { const f = wxField(ti, def); paintField(cv, f); if (isTop) drawLabels(f); }
       };
-      wx.anim = requestAnimationFrame(step);
+      st.anim = requestAnimationFrame(step);
     } else {
       const f = wxField(ti, def);
       paintField(cv, f);
-      drawLabels(f);
+      if (isTop) drawLabels(f);
     }
-    wx.shown = t; wx.shownGrid = g;
+    const fin = wxField(ti, def);
+    markLayer(k, fin.nd.every((v) => v === 1));
+    st.shown = t; st.shownGrid = g;
+  }
+
+  function renderWx() {
+    if (!wxActive()) { clearWx(); return; }
+    renderCaption();
+    const t = floorHour(wxTime());
+    [...wx.layers.keys()].forEach((k) => { if (!wx.keys.includes(k)) removeWxLayer(k); });
+    wx.keys.forEach((k, i) => renderOneLayer(k, i + 1, t, i === wx.keys.length - 1));
   }
 
   /* ---------------- Render orchestration ---------------- */

@@ -662,3 +662,16 @@ body.night .wx-lbl span { color: #ffb3b3; }
 .set-row.sub-set { padding-left: 14px; border-left: 2px solid var(--line); margin-left: 2px; }
 .set-row[hidden] { display: none; }
 .set-row .sw { margin-right: 0; }
+
+/* ---------- Layer toggle buttons ---------- */
+.wx-ctl { min-width: 0; width: 200px; }
+.wx-sec { font: 600 9.5px var(--sans); text-transform: uppercase; letter-spacing: .07em; color: var(--accent); padding: 6px 8px 3px; background: var(--bg-2); }
+.wx-sec .muted { text-transform: none; letter-spacing: 0; font-weight: 400; }
+.wx-btns { display: grid; grid-template-columns: 1fr 1fr; gap: 3px; padding: 0 6px 6px; background: var(--bg-2); }
+.wx-ctl .lyr { background: var(--bg-3); color: var(--text); border: 1px solid var(--line); border-radius: 5px; padding: 4px 6px; font: 11.5px var(--sans); cursor: pointer; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: background-color .15s ease, border-color .15s ease, color .15s ease; }
+.wx-ctl > .lyr { margin: 0 6px 6px; width: calc(100% - 12px); }
+.wx-ctl .lyr:hover { border-color: var(--accent); }
+.wx-ctl .lyr[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+.wx-ctl .lyr.nodata { background: var(--lim); color: var(--lim-fg); border-color: var(--lim); }
+.wx-ctl .lyr.nodata[aria-pressed="true"] { box-shadow: inset 0 0 0 2px var(--on-accent); }
+.wx-ctl .lp-extra { background: var(--bg-2); border-bottom: 0; padding: 0 8px 6px; }
