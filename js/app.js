@@ -16,6 +16,7 @@
     'wind_speed_850hPa', 'wind_direction_850hPa', 'wind_speed_500hPa', 'wind_direction_500hPa',
     'wind_speed_300hPa', 'wind_direction_300hPa', 'wind_speed_200hPa'];
   const SM = window.SkyModel;
+  const APP_VERSION = '1.3.0';
 
   const state = {
     lat: null, lon: null,
@@ -60,36 +61,31 @@
     errorTileUrl: window.LightPollution.errorTile,
     attribution: 'Light pollution: <a href="https://djlorenz.github.io/astronomy/lp/" target="_blank" rel="noopener">D. Lorenz atlas ' + window.LightPollution.YEAR + '</a>',
   });
-  const LPControl = L.Control.extend({
-    options: { position: 'topright' },
-    onAdd() {
-      const div = L.DomUtil.create('div', 'leaflet-bar lp-ctl');
-      div.innerHTML = `<button type="button" class="lp-toggle" aria-pressed="false" title="Toggle light-pollution map">Light pollution</button>
-        <div class="lp-extra" hidden><input type="range" min="10" max="100" value="50" aria-label="Overlay opacity"><a href="${window.LightPollution.colorsUrl}" target="_blank" rel="noopener">key</a></div>`;
-      L.DomEvent.disableClickPropagation(div);
-      L.DomEvent.disableScrollPropagation(div);
-      const btn = div.querySelector('.lp-toggle');
-      const extra = div.querySelector('.lp-extra');
-      const range = div.querySelector('input');
-      const set = (on) => {
-        if (on) lpLayer.addTo(map); else map.removeLayer(lpLayer);
-        btn.setAttribute('aria-pressed', on); extra.hidden = !on;
-        try { localStorage.setItem('astrosite.lpmap', on ? '1' : '0'); } catch (e) { /* ignore */ }
-      };
-      btn.addEventListener('click', () => set(!map.hasLayer(lpLayer)));
-      range.addEventListener('input', () => {
-        lpLayer.setOpacity(range.value / 100);
-        try { localStorage.setItem('astrosite.lpopacity', range.value); } catch (e) { /* ignore */ }
-      });
-      try {
-        const op = localStorage.getItem('astrosite.lpopacity');
-        if (op) { range.value = op; lpLayer.setOpacity(op / 100); }
-        if (localStorage.getItem('astrosite.lpmap') === '1') setTimeout(() => set(true), 0);
-      } catch (e) { /* ignore */ }
-      return div;
+  let mapQuality = 'standard';
+  try { mapQuality = localStorage.getItem('astrosite.quality') === 'high' ? 'high' : 'standard'; } catch (e) { /* ignore */ }
+  const tileLon = (x, z) => (x / Math.pow(2, z)) * 360 - 180;
+  const tileLat = (y, z) => { const n = Math.PI - (2 * Math.PI * y) / Math.pow(2, z); return (180 / Math.PI) * Math.atan(Math.sinh(n)); };
+  const LPHQ = L.GridLayer.extend({
+    createTile(coords, done) {
+      const c = document.createElement('canvas');
+      c.width = 256; c.height = 256;
+      const z = coords.z;
+      window.LightPollution.renderHQ(c, (px) => tileLon(coords.x + px / 256, z), (py) => tileLat(coords.y + py / 256, z))
+        .then(() => done(null, c), (err) => done(err, c));
+      return c;
     },
   });
-  map.addControl(new LPControl());
+  // Above zoom 8 the atlas images are upscaled and look blocky; in High quality we render those zooms from raw data
+  const lpHQ = new LPHQ({ pane: 'lpPane', minZoom: 9, maxZoom: 19, opacity: 0.5, tileSize: 256, updateWhenZooming: false, keepBuffer: 1 });
+  function lpSetOn(on) {
+    const high = mapQuality === 'high';
+    lpLayer.options.maxZoom = high ? 8 : 19;
+    if (map.hasLayer(lpLayer)) map.removeLayer(lpLayer);
+    if (map.hasLayer(lpHQ)) map.removeLayer(lpHQ);
+    if (on) { lpLayer.addTo(map); if (high) lpHQ.addTo(map); }
+  }
+  function lpSetOpacity(o) { lpLayer.setOpacity(o); lpHQ.setOpacity(o); }
+
   map.on('baselayerchange', (e) => { try { localStorage.setItem('astrosite.layer', e.name); } catch (err) { /* ignore */ } });
 
   const markerIcon = L.divIcon({
@@ -221,6 +217,7 @@
       state.utcOffset = meta.utc_offset_seconds;
       if (meta.hourly && meta.hourly.time) state.fc = buildForecast(meta, aq);
     }
+    if (wx.key) scheduleWx(0);
     renderAll();
   }
 
@@ -363,9 +360,12 @@
   function renderHead() {
     const nameEl = $('#siteName');
     if (document.activeElement !== nameEl) nameEl.value = state.name || '';
-    $('#siteSub').textContent = state.lat == null ? 'Search, click the map, or use your location to begin' : (state.sub || `${fixed(state.lat, 5)}, ${fixed(state.lon, 5)}`);
+    $('#siteSub').textContent = state.lat == null ? 'Search, click the map, or use GPS' : `${fixed(state.lat, 5)}, ${fixed(state.lon, 5)}`;
+    $('#siteSub').title = state.sub || '';
     $('#elevInput').textContent = state.elev == null ? '…' : Math.round(state.elev);
     $('#elevSrc').textContent = state.elevSource === 'loading' ? 'looking up…' : state.elevSource;
+    $('.elev-chip').title = `Elevation${state.elevSource && state.elevSource !== 'loading' ? ` · ${state.elevSource}` : ''}`;
+    $('.elev-chip').hidden = state.lat == null;
     const b = $('#skyBadge');
     const LPm = window.LightPollution;
     if (state.lat == null) { b.hidden = true; }
@@ -1050,6 +1050,12 @@
     if (!fc) { box.innerHTML = '<p class="muted" style="padding:12px 0">Loading the 14-day forecast…</p>'; return; }
 
     const hours = fc.hours;
+    if (state.pendingTime != null) {
+      let best = 0, bd = Infinity;
+      hours.forEach((h, i) => { const d = Math.abs(h.t.getTime() + 1800000 - state.pendingTime); if (d < bd) { bd = d; best = i; } });
+      state.fcSel = best;
+      state.pendingTime = null;
+    }
     if (state.fcSel == null || state.fcSel >= hours.length) {
       // default: first hour after astronomical dusk tonight (or now if already dark)
       const now = Date.now();
@@ -1125,10 +1131,6 @@
         <div class="fc-nav-right">
         <button class="btn small${state.fcEdit ? ' on' : ''}" id="fcEditBtn" aria-pressed="${state.fcEdit}" title="Choose which rows to show">${state.fcEdit ? 'Done' : 'Edit rows'}</button>
         <label class="chk"><input type="checkbox" id="fcVals" ${state.showVals ? 'checked' : ''}> Show values</label>
-        <div class="seg" role="group" aria-label="Units">
-          <button data-units="metric" class="${state.units === 'metric' ? 'on' : ''}">Metric</button>
-          <button data-units="imperial" class="${state.units === 'imperial' ? 'on' : ''}">Imperial</button>
-        </div>
         </div>
       </div>
       <div class="fc-timeline">
@@ -1244,13 +1246,6 @@
       else navNight(step);
     });
     $$('[data-nav]', box).forEach((b) => b.addEventListener('click', () => navNight(b.dataset.nav)));
-    $$('[data-units]', box).forEach((b) => b.addEventListener('click', () => {
-      state.units = b.dataset.units;
-      try { localStorage.setItem('astrosite.units', state.units); } catch (err) { /* ignore */ }
-      const sl = scroller.scrollLeft;
-      renderTonight();
-      $('.fc-scroll').scrollLeft = sl;
-    }));
     selectHour(state.fcSel, true, true);
   }
 
@@ -1316,6 +1311,7 @@
       }
     }
     renderHourDetail(hours[i]);
+    if (wx.key) scheduleWx(150);
     const nightBefore = lastNightKey;
     renderNightSummary(hours[i].t);
     if (lastNightKey !== nightBefore && !instant) animateIn($('#fcNight'));
@@ -1378,7 +1374,10 @@
   const saveFavs = () => { try { localStorage.setItem('astrosite.favs', JSON.stringify(favs)); } catch (e) { toast('Could not save — browser storage unavailable'); } };
   const currentFavIdx = () => (state.lat == null ? -1 : favs.findIndex((f) => sameSpot(f, state)));
 
+  let homeRenderedKey = null;
+  const homeRenderKey = () => favs.map((f) => `${f.name}@${(+f.lat).toFixed(4)},${(+f.lon).toFixed(4)}`).join('|');
   function updateFavStar() {
+    if (!$('#tab-home').hidden && homeRenderedKey !== null && homeRenderedKey !== homeRenderKey()) setTimeout(renderHome, 0);
     const star = $('#favToggle');
     if (!star) return;
     star.hidden = state.lat == null;
@@ -1513,20 +1512,259 @@
     }
   });
 
+  function setUnits(u) {
+    state.units = u === 'imperial' ? 'imperial' : 'metric';
+    try { localStorage.setItem('astrosite.units', state.units); } catch (err) { /* ignore */ }
+    $$('#unitsSeg button').forEach((b) => b.classList.toggle('on', b.dataset.units === state.units));
+    if (state.fc) {
+      const sc = $('.fc-scroll'); const sl = sc ? sc.scrollLeft : 0;
+      renderTonight();
+      if ($('.fc-scroll')) $('.fc-scroll').scrollLeft = sl;
+    }
+    if (typeof renderWx === 'function') renderWx();
+  }
+
+  /* ---------------- Home: saved locations with a combined-conditions timeline ---------------- */
+  const HOME_VARS = ['cloud_cover', 'cloud_cover_high', 'dew_point_2m', 'surface_pressure', 'total_column_integrated_water_vapour',
+    'wind_gusts_10m', 'wind_speed_850hPa', 'wind_direction_850hPa', 'wind_speed_500hPa', 'wind_direction_500hPa',
+    'wind_speed_300hPa', 'wind_direction_300hPa', 'wind_speed_200hPa'];
+  let homeCache = { key: '', at: 0, data: null, pending: null };
+  const homeKey = () => favs.map((f) => `${(+f.lat).toFixed(3)},${(+f.lon).toFixed(3)}`).join('|');
+
+  async function loadHomeData() {
+    const key = homeKey();
+    if (!favs.length) return null;
+    if (homeCache.key === key && homeCache.data && Date.now() - homeCache.at < 3600000) return homeCache.data;
+    if (homeCache.pending && homeCache.key === key) return homeCache.pending;
+    homeCache.key = key;
+    const lats = favs.map((f) => (+f.lat).toFixed(4)).join(','), lons = favs.map((f) => (+f.lon).toFixed(4)).join(',');
+    const q = `latitude=${lats}&longitude=${lons}&timezone=GMT`;
+    homeCache.pending = (async () => {
+      const [fc, aq] = await Promise.all([
+        fetch(`${OPEN_METEO}/forecast?${q}&forecast_days=${FC_DAYS}&wind_speed_unit=ms&hourly=${HOME_VARS.join(',')}`).then((r) => (r.ok ? r.json() : Promise.reject(new Error(`forecast ${r.status}`)))),
+        fetch(`${AIR_QUALITY}?${q}&forecast_days=7&hourly=aerosol_optical_depth`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+      ]);
+      const fcs = Array.isArray(fc) ? fc : [fc];
+      const aqs = aq ? (Array.isArray(aq) ? aq : [aq]) : [];
+      const now = Date.now() - 3600000;
+      const data = favs.map((f, k) => {
+        const H = fcs[k] && fcs[k].hourly;
+        if (!H) return { hours: [] };
+        const aodMap = new Map();
+        const A2 = aqs[k] && aqs[k].hourly;
+        if (A2 && A2.time && A2.aerosol_optical_depth) A2.time.forEach((t, i) => { if (A2.aerosol_optical_depth[i] != null) aodMap.set(Date.parse(`${t}:00Z`), A2.aerosol_optical_depth[i]); });
+        const hours = [];
+        H.time.forEach((t, i) => {
+          const ms = Date.parse(`${t}:00Z`);
+          if (ms < now) return;
+          const g = (name) => (H[name] ? H[name][i] : null);
+          const h = {
+            t: new Date(ms), cloud: g('cloud_cover'), cloudHigh: g('cloud_cover_high'), dew: g('dew_point_2m'), pressure: g('surface_pressure'),
+            tcwv: g('total_column_integrated_water_vapour'), gust: g('wind_gusts_10m'),
+            ws850: g('wind_speed_850hPa'), wd850: g('wind_direction_850hPa'), ws500: g('wind_speed_500hPa'), wd500: g('wind_direction_500hPa'),
+            ws300: g('wind_speed_300hPa'), wd300: g('wind_direction_300hPa'), ws200: g('wind_speed_200hPa'), aod: aodMap.has(ms) ? aodMap.get(ms) : null,
+          };
+          h.sunAlt = SunCalc.getPosition(h.t, f.lat, f.lon).altitude * A.R2D;
+          h.see = SM.seeing(h);
+          h.trans = SM.transparency(h);
+          // One colour per hour from the three sky-quality drivers
+          h.night = h.sunAlt <= -12;
+          if (h.cloud != null) {
+            const trQ = h.trans ? clamp01(1 - h.trans.index / 30) : 0.6;
+            const seQ = h.see ? clamp01((4.5 - h.see.arcsec) / 3.5) : 0.6;
+            h.q = Math.pow(1 - h.cloud / 100, 1.5) * (0.6 + 0.25 * trQ + 0.15 * seQ);
+            h.lim = !h.trans || !h.see || h.trans.aodEst || h.trans.pwvEst;
+          }
+          hours.push(h);
+        });
+        return { hours };
+      });
+      homeCache.data = data; homeCache.at = Date.now(); homeCache.pending = null;
+      return data;
+    })().catch((e) => { homeCache.pending = null; throw e; });
+    return homeCache.pending;
+  }
+
+  const localDay = (d) => new Intl.DateTimeFormat('en-GB', { weekday: 'short', day: 'numeric' }).format(d);
+  const localTime = (d) => new Intl.DateTimeFormat('en-GB', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false }).format(d);
+
+  // Summaries per location: next 24 h (hourly) and next 14 nights (one value per night)
+  function homeSeries(hours) {
+    const now = Date.now();
+    const h24 = hours.filter((h) => h.q != null && h.t.getTime() >= now - 1800000 && h.t.getTime() < now + 24 * 3600000);
+    const byNight = new Map();
+    hours.forEach((h) => {
+      if (h.q == null) return;
+      const d = new Date(h.t.getTime() - 12 * 3600000); // evening date (browser-local) of the night this hour belongs to
+      const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+      if (!byNight.has(key)) byNight.set(key, { day: new Date(d.getFullYear(), d.getMonth(), d.getDate()), all: [], dark: [] });
+      const n = byNight.get(key);
+      n.all.push(h); if (h.night) n.dark.push(h);
+    });
+    const nights = [...byNight.values()].slice(0, 14).map((n) => {
+      const set = n.dark.length ? n.dark : n.all;
+      const avg = (f) => { const v = set.map(f).filter((x) => x != null); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; };
+      return {
+        day: n.day, hours: set, q: avg((h) => h.q), lim: set.some((h) => h.lim), cloud: avg((h) => h.cloud),
+        trans: avg((h) => (h.trans ? h.trans.index : null)), see: avg((h) => (h.see ? h.see.arcsec : null)),
+        mid: set[Math.floor(set.length / 2)].t,
+      };
+    });
+    return { h24, nights };
+  }
+
+  function drawGradient(canvas, stops, ticks) {
+    const dpr = window.devicePixelRatio || 1;
+    const w = canvas.clientWidth, hgt = canvas.clientHeight;
+    if (!w) return;
+    canvas.width = Math.round(w * dpr); canvas.height = Math.round(hgt * dpr);
+    const ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+    const cs = getComputedStyle(document.body);
+    ctx.fillStyle = cs.getPropertyValue('--bg-3');
+    ctx.fillRect(0, 0, w, hgt);
+    if (stops.length) {
+      const g = ctx.createLinearGradient(0, 0, w, 0);
+      stops.forEach((st) => g.addColorStop(Math.max(0, Math.min(1, st.x)), shade(st.q, st.lim).bg));
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, w, hgt);
+    }
+    ctx.fillStyle = cs.getPropertyValue('--text');
+    ctx.globalAlpha = 0.55;
+    ticks.forEach((tk) => { const x = Math.round(tk.x * w); ctx.fillRect(x, 0, 1, tk.major ? 5 : 3); ctx.fillRect(x, hgt - (tk.major ? 5 : 3), 1, tk.major ? 5 : 3); });
+    ctx.globalAlpha = 1;
+  }
+
+  const localHour = (d) => new Intl.DateTimeFormat('en-GB', { hour: '2-digit', hour12: false }).format(d);
+
+  async function renderHome() {
+    const list = $('#homeList'), axis = $('#homeAxis'), status = $('#homeStatus'), legend = $('#homeLegend');
+    refreshSettings();
+    homeRenderedKey = homeRenderKey();
+    if (!favs.length) {
+      list.innerHTML = '<p class="muted pad">No saved locations yet. Pick a site and press ☆ next to its name in the header.</p>';
+      axis.innerHTML = ''; legend.innerHTML = ''; status.textContent = '';
+      return;
+    }
+    list.innerHTML = favs.map((f, i) => `<div class="hl-row" data-i="${i}">
+        <button class="hl-name" data-go="${i}" title="Open ${esc(f.name || 'site')}"><span>${esc(f.name || 'Unnamed site')}</span><small>${f.bortle ? `Bortle ~${esc(f.bortle)}` : `${(+f.lat).toFixed(2)}, ${(+f.lon).toFixed(2)}`}</small></button>
+        <canvas class="hl-strip" data-i="${i}" data-kind="h24"></canvas>
+        <canvas class="hl-strip" data-i="${i}" data-kind="d14"></canvas>
+      </div>`).join('');
+    status.textContent = 'Loading forecasts…';
+    let data;
+    try { data = await loadHomeData(); } catch (e) { status.textContent = `Couldn't load forecasts (${e.message})`; return; }
+    if (!data || !$('#homeList .hl-strip')) return;
+    status.textContent = '';
+    const now = Date.now();
+    const h0 = Math.floor(now / 3600000) * 3600000, h1 = h0 + 24 * 3600000;
+    const series = data.map((d) => homeSeries(d.hours));
+    homeCache.series = series;
+    const days = (series.find((s2) => s2.nights.length) || { nights: [] }).nights.map((n) => n.day);
+    const nD = Math.max(1, days.length);
+    homeCache.h24range = [h0, h1];
+    const hourTicks = []; for (let k = 0; k <= 24; k++) hourTicks.push({ x: k / 24, major: new Date(h0 + k * 3600000).getHours() % 6 === 0 });
+    const dayTicks = []; for (let k = 0; k <= nD; k++) dayTicks.push({ x: k / nD, major: true });
+    $$('#homeList .hl-strip').forEach((cv) => {
+      const sr = series[+cv.dataset.i];
+      if (!sr) return;
+      if (cv.dataset.kind === 'h24') {
+        drawGradient(cv, sr.h24.map((h) => ({ x: (h.t.getTime() + 1800000 - h0) / (h1 - h0), q: h.q, lim: h.lim })), hourTicks);
+      } else {
+        drawGradient(cv, sr.nights.map((n, k) => ({ x: (k + 0.5) / nD, q: n.q, lim: n.lim })), dayTicks);
+      }
+    });
+    const stripW = ($('#homeList .hl-strip[data-kind="d14"]') || {}).clientWidth || 200;
+    const dayEvery = Math.max(1, Math.ceil(44 / (stripW / nD)));
+    axis.innerHTML = `<span class="hl-axis-pad"></span>
+      <div class="hl-axis-track"><em>Next 24 h</em>${[0, 6, 12, 18].map((k) => `<span style="left:${(k / 24) * 100}%"><b>${esc(localHour(new Date(h0 + k * 3600000)))}</b></span>`).join('')}</div>
+      <div class="hl-axis-track"><em>Next 14 nights</em>${days.map((d, k) => (k % dayEvery === 0 ? `<span style="left:${((k + 0.5) / nD) * 100}%"><b class="c">${esc(localDay(d))}</b></span>` : '')).join('')}</div>`;
+    const bar = [0, 0.25, 0.5, 0.75, 1].map((q) => `<i style="background:${shade(q, false).bg}"></i>`).join('');
+    legend.innerHTML = `<span class="scale">${bar}</span> worse → better (cloud, transparency, seeing) <i class="red-swatch"></i> estimated inputs <span class="muted">· nights averaged over dark hours · your time zone</span>`;
+  }
+
+  // Hover tooltips and click-through on the strips
+  function homeHit(cv, clientX) {
+    const r = cv.getBoundingClientRect();
+    const fx = (clientX - r.left) / r.width;
+    const sr = homeCache.series && homeCache.series[+cv.dataset.i];
+    if (!sr) return null;
+    if (cv.dataset.kind === 'h24') {
+      const [h0, h1] = homeCache.h24range;
+      const ms = h0 + fx * (h1 - h0);
+      const h = sr.h24.find((x) => ms >= x.t.getTime() && ms < x.t.getTime() + 3600000);
+      return h ? { kind: 'h', h, time: h.t.getTime() } : null;
+    }
+    const n = sr.nights[Math.min(sr.nights.length - 1, Math.floor(fx * sr.nights.length))];
+    return n ? { kind: 'n', n, time: n.mid.getTime() } : null;
+  }
+  $('#homeList').addEventListener('mousemove', (e) => {
+    const cv = e.target.closest('.hl-strip');
+    const tip = $('#fcTip') || (() => { const t = document.createElement('div'); t.id = 'fcTip'; t.className = 'fc-tip'; t.hidden = true; document.body.appendChild(t); return t; })();
+    const hit = cv && homeHit(cv, e.clientX);
+    if (!hit) { tip.hidden = true; return; }
+    const f = favs[+cv.dataset.i];
+    let head, lines;
+    if (hit.kind === 'h') {
+      const h = hit.h;
+      head = `${f.name || 'Site'} · ${localTime(h.t)}`;
+      lines = [`Conditions ${Math.round(h.q * 100)} / 100${h.lim ? ' (estimated inputs)' : ''}${h.night ? '' : ' · not dark'}`,
+        `Cloud ${h.cloud ?? '—'}% · high ${h.cloudHigh ?? '—'}%`,
+        h.trans ? `Transparency ${h.trans.index.toFixed(1)} · ${SM.TRANS_LABELS[h.trans.rawCls]}` : 'Transparency —',
+        h.see ? `Seeing ~${h.see.arcsec.toFixed(1)}″ · ${SM.SEEING_LABELS[h.see.rawCls]}` : 'Seeing —'];
+    } else {
+      const n = hit.n;
+      head = `${f.name || 'Site'} · night of ${new Intl.DateTimeFormat('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }).format(n.day)}`;
+      lines = [`Conditions ${Math.round(n.q * 100)} / 100${n.lim ? ' (estimated inputs)' : ''}`,
+        `Cloud ${n.cloud == null ? '—' : Math.round(n.cloud)}% (night average)`,
+        `Transparency ${n.trans == null ? '—' : n.trans.toFixed(1)} · Seeing ~${n.see == null ? '—' : n.see.toFixed(1)}″`];
+    }
+    tip.innerHTML = `<b>${esc(head)}</b>${lines.map((l) => `<div>${esc(l)}</div>`).join('')}`;
+    tip.hidden = false;
+    const tw = tip.offsetWidth, th = tip.offsetHeight;
+    let x = e.clientX + 14, y = e.clientY + 14;
+    if (x + tw > window.innerWidth - 8) x = e.clientX - tw - 14;
+    if (y + th > window.innerHeight - 8) y = e.clientY - th - 14;
+    tip.style.transform = `translate(${x}px, ${y}px)`;
+  });
+  $('#homeList').addEventListener('mouseleave', () => { const t = $('#fcTip'); if (t) t.hidden = true; });
+  $('#homeList').addEventListener('click', (e) => {
+    const go = e.target.closest('[data-go]');
+    const cv = e.target.closest('.hl-strip');
+    const i = go ? +go.dataset.go : cv ? +cv.dataset.i : -1;
+    if (i < 0) return;
+    const f = favs[i];
+    const hit = cv && homeHit(cv, e.clientX);
+    if (hit) state.pendingTime = hit.time;
+    const t = $('#fcTip'); if (t) t.hidden = true;
+    setLocation(f.lat, f.lon, { name: f.name, zoom: 12, elev: /GPS/.test(f.elevSource || '') ? f.elev : null, elevSource: f.elevSource });
+    activateTab(hit ? 'tonight' : 'coords');
+  });
+  let homeResizeTimer;
+  window.addEventListener('resize', () => {
+    clearTimeout(homeResizeTimer);
+    homeResizeTimer = setTimeout(() => { if (!$('#tab-home').hidden && homeCache.data) renderHome(); }, 200);
+  });
+
   /* ---------------- Settings backup: everything the browser remembers ---------------- */
   const CFG_PREFIX = 'astrosite.';
-  const cfgBtn = $('#cfgBtn'), cfgPop = $('#cfgPop');
-  cfgBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    const open = cfgPop.hidden;
-    cfgPop.hidden = !open;
-    cfgBtn.setAttribute('aria-expanded', open);
-    if (open) {
-      const n = Object.keys(localStorage).filter((k) => k.startsWith(CFG_PREFIX)).length;
-      $('#cfgCount').textContent = `${n} stored`;
-    }
-  });
-  document.addEventListener('click', (e) => { if (!cfgPop.hidden && !e.target.closest('.cfg-wrap')) { cfgPop.hidden = true; cfgBtn.setAttribute('aria-expanded', false); } });
+  function refreshSettings() {
+    const n = Object.keys(localStorage).filter((k) => k.startsWith(CFG_PREFIX)).length;
+    $('#cfgCount').textContent = `${n} stored setting${n === 1 ? '' : 's'}`;
+    $('#favSummary').textContent = favs.length ? `${favs.length} saved location${favs.length === 1 ? '' : 's'}` : 'None saved';
+    $$('#unitsSeg button').forEach((b) => b.classList.toggle('on', b.dataset.units === state.units));
+    $$('#qualitySeg button').forEach((b) => b.classList.toggle('on', b.dataset.quality === mapQuality));
+    $('#appVersion').textContent = APP_VERSION;
+  }
+  $$('#unitsSeg button').forEach((b) => b.addEventListener('click', () => setUnits(b.dataset.units)));
+  $$('#qualitySeg button').forEach((b) => b.addEventListener('click', () => {
+    mapQuality = b.dataset.quality === 'high' ? 'high' : 'standard';
+    try { localStorage.setItem('astrosite.quality', mapQuality); } catch (e) { /* ignore */ }
+    $$('#qualitySeg button').forEach((x) => x.classList.toggle('on', x.dataset.quality === mapQuality));
+    if (map.hasLayer(lpLayer)) lpSetOn(true);
+    if (wx.key) { wx.grid = null; scheduleWx(0); }
+  }));
+  $('#resetWidth').addEventListener('click', () => { setPanelWidth(PANEL_DEFAULT, true); toast('Sidebar width reset'); });
   $('#cfgExport').addEventListener('click', () => {
     const settings = {};
     Object.keys(localStorage).filter((k) => k.startsWith(CFG_PREFIX)).sort().forEach((k) => { settings[k.slice(CFG_PREFIX.length)] = localStorage.getItem(k); });
@@ -1658,14 +1896,19 @@
     ink.style.width = `${active.offsetWidth}px`;
   }
 
-  $$('.tab').forEach((t) => t.addEventListener('click', () => {
-    if (t.classList.contains('active')) return;
+  function activateTab(name, opts = {}) {
+    const t = $(`.tab[data-tab="${name}"]`);
+    if (!t) return;
+    const was = t.classList.contains('active');
     $$('.tab').forEach((x) => { x.classList.toggle('active', x === t); x.setAttribute('aria-selected', x === t); });
-    $$('.tab-body').forEach((b) => { b.hidden = b.id !== `tab-${t.dataset.tab}`; });
-    if (t.dataset.tab === 'tonight') renderTonight();
-    animateIn($(`#tab-${t.dataset.tab}`));
+    $$('.tab-body').forEach((b) => { b.hidden = b.id !== `tab-${name}`; });
+    if (name === 'tonight') renderTonight();
+    if (name === 'home') renderHome();
+    if (!was && !opts.instant) animateIn($(`#tab-${name}`));
     moveInk();
-  }));
+    try { localStorage.setItem('astrosite.tab', name); } catch (e) { /* ignore */ }
+  }
+  $$('.tab').forEach((t) => t.addEventListener('click', () => { if (!t.classList.contains('active')) activateTab(t.dataset.tab); }));
   requestAnimationFrame(moveInk);
 
   /* ---------------- Resizable sidebar (width remembered) ---------------- */
@@ -1709,6 +1952,7 @@
   function setNight(on) {
     const changed = document.body.classList.contains('night') !== on;
     document.body.classList.toggle('night', on);
+    if (changed && !$('#tab-home').hidden && homeCache.data) renderHome();
     if (changed && state.fc && !$('#tab-tonight').hidden) {
       const sc = $('.fc-scroll'); const sl = sc ? sc.scrollLeft : 0;
       renderTonight();
@@ -1719,6 +1963,280 @@
   }
   $$('#schemeSeg button').forEach((b) => b.addEventListener('click', () => setNight(b.dataset.scheme === 'night')));
   try { if (localStorage.getItem('astrosite.night') === '1') setNight(true); } catch (e) { /* ignore */ }
+
+  /* ---------------- Map layers panel: light pollution, live satellite IR, forecast overlays ---------------- */
+  map.createPane('satPane'); map.getPane('satPane').style.zIndex = 245; map.getPane('satPane').style.pointerEvents = 'none';
+  map.createPane('wxPane'); map.getPane('wxPane').style.zIndex = 260; map.getPane('wxPane').style.pointerEvents = 'none';
+
+  const satTime = () => {
+    const d = new Date(Date.now() - 40 * 60000);
+    d.setUTCMinutes(d.getUTCMinutes() - (d.getUTCMinutes() % 10), 0, 0);
+    return d.toISOString().slice(0, 17) + '00Z';
+  };
+  const SAT_URL = 'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/{layer}/default/{time}/GoogleMapsCompatible_Level6/{z}/{y}/{x}.png';
+  const satLayers = ['Himawari_AHI_Band13_Clean_Infrared', 'GOES-West_ABI_Band13_Clean_Infrared', 'GOES-East_ABI_Band13_Clean_Infrared']
+    .map((layer) => L.tileLayer(SAT_URL, { layer, time: satTime(), pane: 'satPane', maxNativeZoom: 6, maxZoom: 19, opacity: 0.75, crossOrigin: true,
+      attribution: 'Satellite IR: <a href="https://earthdata.nasa.gov/gibs" target="_blank" rel="noopener">NASA GIBS</a> (NOAA GOES, JMA Himawari)' }));
+  const satGroup = L.layerGroup(satLayers);
+  setInterval(() => { if (map.hasLayer(satGroup)) { const t = satTime(); satLayers.forEach((l) => { l.options.time = t; l.redraw(); }); } }, 10 * 60000);
+
+  const WX_KEYS = ['cloud', 'cloudLow', 'cloudMid', 'cloudHigh', 'trans', 'see', 'fog', 'wind', 'gust', 'temp', 'dew', 'rh'];
+  const wx = { key: '', opacity: 0.65, vals: false, grid: null, overlay: null, labels: null, req: 0, manualTime: null, timer: 0, loading: false };
+  try {
+    wx.key = localStorage.getItem('astrosite.wxLayer') || '';
+    wx.opacity = parseFloat(localStorage.getItem('astrosite.wxOpacity')) || 0.65;
+    wx.vals = localStorage.getItem('astrosite.wxVals') === '1';
+  } catch (e) { /* ignore */ }
+
+  const LayersControl = L.Control.extend({
+    options: { position: 'topright' },
+    onAdd() {
+      const div = L.DomUtil.create('div', 'leaflet-bar lp-ctl wx-ctl');
+      const rowDefsForMap = () => rowDefs().filter((r) => WX_KEYS.includes(r.key));
+      div.innerHTML = `
+        <button type="button" class="lp-toggle" data-lyr="lp" aria-pressed="false" title="Light-pollution atlas">Light pollution</button>
+        <div class="lp-extra" data-for="lp" hidden><input type="range" min="10" max="100" value="50" aria-label="Light-pollution opacity"><a href="${window.LightPollution.colorsUrl}" target="_blank" rel="noopener">key</a></div>
+        <button type="button" class="lp-toggle" data-lyr="sat" aria-pressed="false" title="Latest geostationary infrared imagery (about 40 min old)">Satellite clouds</button>
+        <div class="lp-extra" data-for="sat" hidden><input type="range" min="10" max="100" value="75" aria-label="Satellite opacity"></div>
+        <select class="wx-select" aria-label="Forecast overlay"><option value="">Forecast overlay: off</option></select>
+        <div class="lp-extra" data-for="wx" hidden><input type="range" min="10" max="100" value="${Math.round(wx.opacity * 100)}" aria-label="Forecast overlay opacity"><label class="chk"><input type="checkbox" class="wx-vals" ${wx.vals ? 'checked' : ''}> values</label></div>`;
+      const sel = div.querySelector('.wx-select');
+      // labels are filled lazily (row definitions need a location for source links, so use a neutral copy)
+      const names = { cloud: 'Cloud cover', cloudLow: 'Low cloud', cloudMid: 'Mid cloud', cloudHigh: 'High cloud', trans: 'Transparency', see: 'Seeing', fog: 'Mist / fog', wind: 'Wind speed', gust: 'Wind gusts', temp: 'Temperature', dew: 'Dew point', rh: 'Humidity' };
+      WX_KEYS.forEach((k) => { const o = document.createElement('option'); o.value = k; o.textContent = names[k]; sel.appendChild(o); });
+      sel.value = wx.key;
+      void rowDefsForMap;
+      L.DomEvent.disableClickPropagation(div);
+      L.DomEvent.disableScrollPropagation(div);
+      const extra = (k) => div.querySelector(`.lp-extra[data-for="${k}"]`);
+      const btn = (k) => div.querySelector(`[data-lyr="${k}"]`);
+      const setLp = (on) => {
+        lpSetOn(on);
+        btn('lp').setAttribute('aria-pressed', on); extra('lp').hidden = !on;
+        try { localStorage.setItem('astrosite.lpmap', on ? '1' : '0'); } catch (e) { /* ignore */ }
+      };
+      const setSat = (on) => {
+        if (on) { const t = satTime(); satLayers.forEach((l) => { l.options.time = t; }); satGroup.addTo(map); } else map.removeLayer(satGroup);
+        btn('sat').setAttribute('aria-pressed', on); extra('sat').hidden = !on;
+        try { localStorage.setItem('astrosite.sat', on ? '1' : '0'); } catch (e) { /* ignore */ }
+      };
+      btn('lp').addEventListener('click', () => setLp(!map.hasLayer(lpLayer)));
+      btn('sat').addEventListener('click', () => setSat(!map.hasLayer(satGroup)));
+      extra('lp').querySelector('input').addEventListener('input', (e) => { lpSetOpacity(e.target.value / 100); try { localStorage.setItem('astrosite.lpopacity', e.target.value); } catch (err) { /* ignore */ } });
+      extra('sat').querySelector('input').addEventListener('input', (e) => { satLayers.forEach((l) => l.setOpacity(e.target.value / 100)); try { localStorage.setItem('astrosite.satopacity', e.target.value); } catch (err) { /* ignore */ } });
+      extra('wx').querySelector('input[type=range]').addEventListener('input', (e) => {
+        wx.opacity = e.target.value / 100;
+        if (wx.overlay) wx.overlay.setOpacity(wx.opacity);
+        try { localStorage.setItem('astrosite.wxOpacity', wx.opacity); } catch (err) { /* ignore */ }
+      });
+      extra('wx').querySelector('.wx-vals').addEventListener('change', (e) => {
+        wx.vals = e.target.checked;
+        try { localStorage.setItem('astrosite.wxVals', wx.vals ? '1' : '0'); } catch (err) { /* ignore */ }
+        renderWx();
+      });
+      sel.addEventListener('change', () => {
+        wx.key = sel.value; extra('wx').hidden = !wx.key;
+        try { localStorage.setItem('astrosite.wxLayer', wx.key); } catch (err) { /* ignore */ }
+        scheduleWx(0);
+      });
+      extra('wx').hidden = !wx.key;
+      try {
+        const lo = localStorage.getItem('astrosite.lpopacity'); if (lo) { extra('lp').querySelector('input').value = lo; lpSetOpacity(lo / 100); }
+        const so = localStorage.getItem('astrosite.satopacity'); if (so) { extra('sat').querySelector('input').value = so; satLayers.forEach((l) => l.setOpacity(so / 100)); }
+        if (localStorage.getItem('astrosite.lpmap') === '1') setTimeout(() => setLp(true), 0);
+        if (localStorage.getItem('astrosite.sat') === '1') setTimeout(() => setSat(true), 0);
+      } catch (e) { /* ignore */ }
+      return div;
+    },
+  });
+  map.addControl(new LayersControl());
+
+  // Caption with time stepping and legend
+  const wxCap = document.createElement('div');
+  wxCap.className = 'wx-caption'; wxCap.hidden = true;
+  $('.map-wrap').appendChild(wxCap);
+  wxCap.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-step]');
+    if (!b) return;
+    const step = +b.dataset.step;
+    if (state.fc && state.fcSel != null) selectHour(state.fcSel + step, !$('#tab-tonight').hidden);
+    else { wx.manualTime = (wx.manualTime || floorHour(Date.now())) + step * 3600000; scheduleWx(0); }
+  });
+
+  const floorHour = (ms) => Math.floor(ms / 3600000) * 3600000;
+  const isoHour = (ms) => new Date(ms).toISOString().slice(0, 13) + ':00';
+  function wxTime() {
+    if (state.fc && state.fcSel != null && state.fc.hours[state.fcSel]) return state.fc.hours[state.fcSel].t.getTime();
+    return wx.manualTime || floorHour(Date.now());
+  }
+  function scheduleWx(delay = 400) {
+    clearTimeout(wx.timer);
+    wx.timer = setTimeout(updateWx, delay);
+  }
+  map.on('moveend', () => { if (wx.key) scheduleWx(600); });
+
+  function viewCovered() {
+    if (!wx.grid) return false;
+    return wx.grid.zoom === map.getZoom() && wx.grid.bounds.contains(map.getBounds());
+  }
+
+  async function updateWx() {
+    if (!wx.key) { clearWx(); return; }
+    const t = floorHour(wxTime());
+    const needFetch = !viewCovered() || !wx.grid.times.includes(t);
+    if (!needFetch) { renderWx(); return; }
+    const id = ++wx.req;
+    wx.loading = true; renderCaption();
+    try {
+      const grid = await fetchWxGrid(t);
+      if (id !== wx.req) return;
+      wx.grid = grid;
+    } catch (err) {
+      if (id === wx.req) toast(`Forecast overlay unavailable: ${err.message}`);
+    } finally {
+      if (id === wx.req) { wx.loading = false; renderWx(); }
+    }
+  }
+
+  async function fetchWxGrid(t) {
+    const size = map.getSize();
+    const zoom = map.getZoom();
+    const hq = mapQuality === 'high';
+    const cols = Math.max(6, Math.min(hq ? 16 : 12, Math.round(size.x / (hq ? 55 : 80))));
+    const rows = Math.max(5, Math.min(hq ? 16 : 12, Math.round(size.y / (hq ? 55 : 80))));
+    const pb = map.getPixelBounds();
+    const padX = (pb.max.x - pb.min.x) * 0.12, padY = (pb.max.y - pb.min.y) * 0.12;
+    const minX = pb.min.x - padX, maxX = pb.max.x + padX, minY = pb.min.y - padY, maxY = pb.max.y + padY;
+    const pts = [];
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const ll = map.unproject([minX + ((c + 0.5) / cols) * (maxX - minX), minY + ((r + 0.5) / rows) * (maxY - minY)], zoom);
+        pts.push({ lat: Math.max(-85, Math.min(85, ll.lat)), lon: A.mod(ll.lng + 180, 360) - 180, r, c });
+      }
+    }
+    const nw = map.unproject([minX, minY], zoom), se = map.unproject([maxX, maxY], zoom);
+    const bounds = L.latLngBounds(se, nw);
+    const start = t - 6 * 3600000, end = t + 24 * 3600000;
+    const q = `latitude=${pts.map((p) => p.lat.toFixed(3)).join(',')}&longitude=${pts.map((p) => p.lon.toFixed(3)).join(',')}&timezone=GMT&start_hour=${isoHour(start)}&end_hour=${isoHour(end)}`;
+    const [fc, aq] = await Promise.all([
+      fetch(`${OPEN_METEO}/forecast?${q}&wind_speed_unit=ms&hourly=${FC_VARS.join(',')}`).then((r) => (r.ok ? r.json() : r.json().then((j) => Promise.reject(new Error(j.reason || r.status))))),
+      fetch(`${AIR_QUALITY}?${q}&hourly=aerosol_optical_depth`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+    ]);
+    const fcs = Array.isArray(fc) ? fc : [fc];
+    const aqs = aq ? (Array.isArray(aq) ? aq : [aq]) : [];
+    const times = (fcs[0] && fcs[0].hourly ? fcs[0].hourly.time : []).map((s) => Date.parse(`${s}:00Z`));
+    pts.forEach((p, k) => {
+      p.H = fcs[k] ? fcs[k].hourly : null;
+      const AQ = aqs[k] && aqs[k].hourly;
+      p.aod = AQ && AQ.time && AQ.aerosol_optical_depth ? new Map(AQ.time.map((s, i) => [Date.parse(`${s}:00Z`), AQ.aerosol_optical_depth[i]])) : new Map();
+    });
+    return { pts, cols, rows, bounds, zoom, times };
+  }
+
+  function wxHour(p, ti) {
+    const H = p.H;
+    if (!H) return null;
+    const g = (k) => (H[k] ? H[k][ti] : null);
+    const t = wx.grid.times[ti];
+    const h = {
+      t: new Date(t), cloud: g('cloud_cover'), cloudLow: g('cloud_cover_low'), cloudMid: g('cloud_cover_mid'), cloudHigh: g('cloud_cover_high'),
+      vis: g('visibility'), temp: g('temperature_2m'), dew: g('dew_point_2m'), rh: g('relative_humidity_2m'),
+      wind: g('wind_speed_10m'), gust: g('wind_gusts_10m'), wdir: g('wind_direction_10m'), precip: g('precipitation_probability'),
+      pressure: g('surface_pressure'), tcwv: g('total_column_integrated_water_vapour'),
+      ws850: g('wind_speed_850hPa'), wd850: g('wind_direction_850hPa'), ws500: g('wind_speed_500hPa'), wd500: g('wind_direction_500hPa'),
+      ws300: g('wind_speed_300hPa'), wd300: g('wind_direction_300hPa'), ws200: g('wind_speed_200hPa'),
+      aod: p.aod.has(t) ? p.aod.get(t) : null,
+    };
+    h.see = SM.seeing(h); h.trans = SM.transparency(h); h.fog = SM.fog(h); h.dewRisk = SM.dewRisk(h.fog.spread);
+    return h;
+  }
+
+  function clearWx() {
+    if (wx.overlay) { map.removeLayer(wx.overlay); wx.overlay = null; }
+    if (wx.labels) { map.removeLayer(wx.labels); wx.labels = null; }
+    wxCap.hidden = true;
+  }
+
+  function renderCaption() {
+    if (!wx.key) { wxCap.hidden = true; return; }
+    const def = rowDefsSafe().find((r) => r.key === wx.key);
+    const t = wxTime();
+    const bar = [0, 0.25, 0.5, 0.75, 1].map((q) => `<i style="background:${shade(q, false).bg}"></i>`).join('');
+    wxCap.innerHTML = `<button data-step="-1" title="Previous hour" aria-label="Previous hour">◀</button>
+      <span><b>${esc(def ? def.label : wx.key)}</b> · ${esc(state.tz ? `${fmtDay(new Date(t))} ${fmtTime(new Date(t))}` : localTime(new Date(t)))}${wx.loading ? ' · loading…' : ''}</span>
+      <button data-step="1" title="Next hour" aria-label="Next hour">▶</button>
+      <span class="scale" title="worse → better">${bar}</span>`;
+    wxCap.hidden = false;
+  }
+
+  function rowDefsSafe() {
+    // rowDefs builds source links from the site; use a neutral location when none is selected
+    if (state.lat != null) return rowDefs();
+    const saved = [state.lat, state.lon];
+    state.lat = 0; state.lon = 0;
+    try { return rowDefs(); } finally { [state.lat, state.lon] = saved; }
+  }
+
+  function renderWx() {
+    if (!wx.key) { clearWx(); return; }
+    renderCaption();
+    const g = wx.grid;
+    if (!g) return;
+    const t = floorHour(wxTime());
+    const ti = g.times.indexOf(t);
+    if (ti < 0) return;
+    const def = rowDefsSafe().find((r) => r.key === wx.key);
+    const cv = document.createElement('canvas');
+    const labels = [];
+    const cells = g.pts.map((p) => {
+      const h = wxHour(p, ti);
+      const c = h ? def.cell(h) : { nodata: true };
+      if (wx.vals && !c.nodata) labels.push({ p, html: c.html || esc(c.txt || '') });
+      return c;
+    });
+    if (mapQuality === 'high') {
+      // Bicubic (Catmull-Rom) interpolation of the quality value, coloured per pixel
+      const S = 10;
+      cv.width = g.cols * S; cv.height = g.rows * S;
+      const ctx = cv.getContext('2d');
+      const qAt = (r, c) => {
+        r = Math.max(0, Math.min(g.rows - 1, r)); c = Math.max(0, Math.min(g.cols - 1, c));
+        const cell = cells[r * g.cols + c];
+        return cell.nodata || cell.q == null ? 0.5 : cell.q;
+      };
+      const crs = (p0, p1, p2, p3, t) => 0.5 * ((2 * p1) + (-p0 + p2) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t * t + (-p0 + 3 * p1 - 3 * p2 + p3) * t * t * t);
+      for (let y = 0; y < cv.height; y++) {
+        const fy = (y + 0.5) / S - 0.5, r1 = Math.floor(fy), ty = fy - r1;
+        for (let x = 0; x < cv.width; x++) {
+          const fx = (x + 0.5) / S - 0.5, c1 = Math.floor(fx), tx = fx - c1;
+          const rowv = [-1, 0, 1, 2].map((dr) => crs(qAt(r1 + dr, c1 - 1), qAt(r1 + dr, c1), qAt(r1 + dr, c1 + 1), qAt(r1 + dr, c1 + 2), tx));
+          const q = crs(rowv[0], rowv[1], rowv[2], rowv[3], ty);
+          const near = cells[Math.max(0, Math.min(g.rows - 1, Math.round(fy))) * g.cols + Math.max(0, Math.min(g.cols - 1, Math.round(fx)))];
+          ctx.fillStyle = (near.nodata ? shade(null, true) : shade(Math.max(0, Math.min(1, q)), near.lim)).bg;
+          ctx.fillRect(x, y, 1, 1);
+        }
+      }
+    } else {
+      cv.width = g.cols; cv.height = g.rows;
+      const ctx = cv.getContext('2d');
+      g.pts.forEach((p, k) => {
+        const c = cells[k];
+        const col = c.nodata ? shade(null, true) : (shade(c.q, c.lim) || shade(0.5, false));
+        ctx.fillStyle = col.bg;
+        ctx.fillRect(p.c, p.r, 1, 1);
+      });
+    }
+    const url = cv.toDataURL();
+    if (wx.overlay) { wx.overlay.setUrl(url); wx.overlay.setBounds(g.bounds); wx.overlay.setOpacity(wx.opacity); }
+    else wx.overlay = L.imageOverlay(url, g.bounds, { pane: 'wxPane', opacity: wx.opacity, className: 'wx-img', interactive: false }).addTo(map);
+    if (wx.labels) { map.removeLayer(wx.labels); wx.labels = null; }
+    if (wx.vals) {
+      wx.labels = L.layerGroup(labels.map(({ p, html }) => L.marker([p.lat, p.lon], {
+        pane: 'wxPane', interactive: false, keyboard: false,
+        icon: L.divIcon({ className: 'wx-lbl', html: `<span>${html}</span>`, iconSize: [36, 16], iconAnchor: [18, 8] }),
+      }))).addTo(map);
+    }
+  }
 
   /* ---------------- Render orchestration ---------------- */
   function renderAll() {
@@ -1756,6 +2274,9 @@
   } catch (e) { /* ignore */ }
 
   renderAll();
+  let startTab = 'coords';
+  try { startTab = localStorage.getItem('astrosite.tab') || (favs.length ? 'home' : 'coords'); } catch (e) { /* ignore */ }
+  activateTab(startTab, { instant: true });
   if (!readHash() && !restoreLast()) {
     setTimeout(() => input.focus(), 50);
   }

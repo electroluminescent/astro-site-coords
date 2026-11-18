@@ -7,7 +7,14 @@ latitude / longitude / elevation format that astrophotography software asks for 
 
 ## Features
 
-- **Map** (Leaflet) — Dark, Streets, Satellite, Terrain; **Light pollution** overlay toggle with opacity (David Lorenz atlas 2025).
+- **Map** (Leaflet) — Dark, Streets, Satellite, Terrain, plus a **Layers** panel:
+  - **Light pollution** (David Lorenz atlas 2025) with opacity;
+  - **Satellite clouds** — latest GOES-East/West and Himawari infrared from NASA GIBS (≈40 min old, refreshed every 10 min);
+  - **Forecast overlay** — any forecast row (cloud, low/mid/high cloud, transparency, seeing, mist/fog, wind, gusts, temperature,
+    dew point, humidity) sampled on a grid across the view, following the hour selected in the Night forecast (◀ ▶ on the map caption).
+- **Home** tab — every saved location with a **next 24 h** gradient (hour ticks) and a **next 14 nights** gradient (day ticks)
+  combining cloud cover, transparency and seeing into one colour; click to open that hour/night. Display preferences,
+  **map quality** (High = spline-interpolated light pollution beyond zoom 8 and forecast overlays), and all import/export/backup.
 - **Search** by place name or address (Nominatim), or paste coordinates in almost any form
   (`43.589, -79.644` · `43°35'20.4"N 79°38'38.4"W` · `N43 35 20 W79 38 38` · `43:35:20, -79:38:38` · Maidenhead `FN03eo`).
 - **Device GPS** via the browser Geolocation API (high-accuracy fix with network fallback, accuracy shown, GPS altitude used when reported).
@@ -25,9 +32,9 @@ latitude / longitude / elevation format that astrophotography software asks for 
   to open that row's data source. Show/hide values, **Edit rows** to choose rows, day dividers, timeline slider with day ticks, ←/→ and
   PgUp/PgDn, Prev / Tonight / Next night. Every section of the tab collapses (remembered).
 - **Saved locations** — star a site, rename it, jump between saved sites, download the list and import it again.
-- **Settings backup** (⚙) — export every remembered setting (saved locations, pins, hidden rows/programs/groups, units, view, colour
+- **Backup** (Home tab) — export every remembered setting (saved locations, pins, hidden rows/programs/groups, units, view, colour
   scheme, sidebar width, map layers) to a JSON file and import it to restore; reset all.
-- **Colour scheme** — Default or **Night** (monochrome red theme for dark adaptation; map imagery converted luminance → red).
+- **Colour scheme** (Home tab) — Default or **Night** (monochrome red theme for dark adaptation; map imagery converted luminance → red).
 - Resizable sidebar (width remembered), eased transitions throughout, last site remembered.
 
 ## Conventions

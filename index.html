@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/style.css?v=1.2.6">
+  <link rel="stylesheet" href="css/style.css?v=1.3.0">
 </head>
 <body>
   <header class="topbar">
@@ -26,41 +26,24 @@
       </button>
       <ul class="results" id="searchResults" role="listbox" hidden></ul>
     </form>
+    <div class="site-block" id="siteBlock">
+      <div class="name-row">
+        <button class="star" id="favToggle" aria-pressed="false" title="Save this location" hidden>☆</button>
+        <input id="siteName" type="text" value="" placeholder="Pick a location" aria-label="Site name">
+      </div>
+      <div class="site-meta">
+        <span class="site-sub" id="siteSub"></span>
+        <a class="sky-badge" id="skyBadge" target="_blank" rel="noopener" hidden></a>
+        <span class="elev-chip" title="Elevation"><span class="elev-lbl">Elev</span> <output id="elevInput" class="elev-val" aria-live="polite"></output> m <span class="elev-src" id="elevSrc"></span></span>
+      </div>
+    </div>
     <div class="top-actions">
       <div class="favs-wrap">
         <button class="btn ghost" id="favsBtn" aria-haspopup="true" aria-expanded="false" title="Saved locations">★ Saved <span class="count" id="favCount"></span></button>
         <div class="favs-pop" id="favsPop" hidden>
-          <div class="favs-head">
-            <b>Saved locations</b>
-            <div class="favs-actions">
-              <button class="btn small" id="favDownload" title="Download your saved locations as a JSON file">Download</button>
-              <button class="btn small" id="favUpload" title="Restore saved locations from a downloaded file">Import</button>
-              <input type="file" id="favFile" accept=".json,application/json" hidden>
-            </div>
-          </div>
+          <div class="favs-head"><b>Saved locations</b></div>
           <ul class="favs-list" id="favsList"></ul>
         </div>
-      </div>
-      <div class="cfg-wrap">
-        <button class="btn ghost icon" id="cfgBtn" aria-haspopup="true" aria-expanded="false" title="Back up or restore settings">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/></svg>
-        </button>
-        <div class="favs-pop cfg-pop" id="cfgPop" hidden>
-          <div class="favs-head"><b>Settings</b><span class="muted small" id="cfgCount"></span></div>
-          <div class="cfg-body">
-            <p class="muted small">Saved locations, pins, hidden rows and programs, units, view, colour scheme, sidebar width and map layers.</p>
-            <div class="cfg-btns">
-              <button class="btn small" id="cfgExport">Export config</button>
-              <button class="btn small" id="cfgImport">Import config</button>
-              <input type="file" id="cfgFile" accept=".json,application/json" hidden>
-            </div>
-            <button class="btn small danger" id="cfgReset">Reset all settings</button>
-          </div>
-        </div>
-      </div>
-      <div class="seg scheme" id="schemeSeg" role="group" aria-label="Colour scheme" title="Night renders everything in monochrome red to preserve dark adaptation">
-        <button data-scheme="default" class="on">Default</button>
-        <button data-scheme="night">Night</button>
       </div>
     </div>
   </header>
@@ -74,24 +57,9 @@
 
     <aside class="panel" id="panel">
       <div class="resizer" id="resizer" role="separator" aria-orientation="vertical" aria-label="Resize sidebar (drag, or use arrow keys; double-click to reset)" tabindex="0"></div>
-      <div class="site-head">
-        <div class="site-title">
-          <div class="name-row">
-            <input id="siteName" type="text" value="" placeholder="Site name" aria-label="Site name">
-            <button class="star" id="favToggle" aria-pressed="false" title="Save this location" hidden>☆</button>
-          </div>
-          <div class="site-sub" id="siteSub">Pick a location to begin</div>
-          <a class="sky-badge" id="skyBadge" target="_blank" rel="noopener" hidden></a>
-        </div>
-        <div class="elev-box">
-          <span class="elev-lbl">Elevation (m)</span>
-          <output id="elevInput" class="elev-val" aria-live="polite"></output>
-          <span class="elev-src" id="elevSrc"></span>
-        </div>
-      </div>
-
       <nav class="tabs" role="tablist">
         <span class="tab-ink" aria-hidden="true"></span>
+        <button role="tab" class="tab" data-tab="home" aria-selected="false">Home</button>
         <button role="tab" class="tab active" data-tab="coords" aria-selected="true">Coordinates</button>
         <button role="tab" class="tab" data-tab="tonight" aria-selected="false">Night forecast</button>
       </nav>
@@ -118,6 +86,61 @@
         <div id="tonight"></div>
       </div>
 
+      <div class="tab-body" id="tab-home" hidden>
+        <section class="home-locs">
+          <div class="home-head">
+            <h5 class="sec">Saved locations</h5>
+            <span class="muted small" id="homeStatus"></span>
+          </div>
+          <div class="hl-axis" id="homeAxis"></div>
+          <div id="homeList"></div>
+          <div class="hl-legend muted small" id="homeLegend"></div>
+        </section>
+        <section class="set-group">
+          <h5 class="sec">Display</h5>
+          <div class="set-row"><span>Colour scheme</span>
+            <div class="seg scheme" id="schemeSeg" role="group" aria-label="Colour scheme">
+              <button data-scheme="default" class="on">Default</button>
+              <button data-scheme="night">Night (red)</button>
+            </div></div>
+          <div class="set-row"><span>Units</span>
+            <div class="seg" id="unitsSeg" role="group" aria-label="Units">
+              <button data-units="metric">Metric</button>
+              <button data-units="imperial">Imperial</button>
+            </div></div>
+          <div class="set-row"><span>Map quality<small class="muted">High: spline-smoothed light pollution and forecast overlays</small></span>
+            <div class="seg" id="qualitySeg" role="group" aria-label="Map quality">
+              <button data-quality="standard">Standard</button>
+              <button data-quality="high">High</button>
+            </div></div>
+          <div class="set-row"><span>Sidebar width</span><button class="btn small" id="resetWidth">Reset to default</button></div>
+        </section>
+        <section class="set-group">
+          <h5 class="sec">Saved locations backup</h5>
+          <div class="set-row"><span id="favSummary" class="muted">None saved</span>
+            <div class="set-btns">
+              <button class="btn small" id="favDownload">Download list</button>
+              <button class="btn small" id="favUpload">Import list</button>
+              <input type="file" id="favFile" accept=".json,application/json" hidden>
+            </div></div>
+        </section>
+        <section class="set-group">
+          <h5 class="sec">Backup</h5>
+          <p class="muted small">Everything this browser remembers: saved locations, pins, hidden rows, programs and groups, collapsed sections, units, view, colour scheme, sidebar width and map layers.</p>
+          <div class="set-row"><span id="cfgCount" class="muted"></span>
+            <div class="set-btns">
+              <button class="btn small" id="cfgExport">Export config</button>
+              <button class="btn small" id="cfgImport">Import config</button>
+              <input type="file" id="cfgFile" accept=".json,application/json" hidden>
+              <button class="btn small danger" id="cfgReset">Reset all settings</button>
+            </div></div>
+        </section>
+        <section class="set-group">
+          <h5 class="sec">About</h5>
+          <p class="muted small">Astro Planner <span id="appVersion"></span> · <a href="https://github.com/electroluminescent/astro-site-coords" target="_blank" rel="noopener">source on GitHub</a></p>
+        </section>
+      </div>
+
       <footer class="panel-foot">
         Map © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors ·
         Search by <a href="https://nominatim.org" target="_blank" rel="noopener">Nominatim</a> ·
@@ -137,9 +160,9 @@
 
   <script src="vendor/leaflet/leaflet.js"></script>
   <script src="vendor/suncalc/suncalc.js"></script>
-  <script src="js/astro.js?v=1.2.6"></script>
-  <script src="js/forecast-model.js?v=1.2.6"></script>
-  <script src="js/lightpollution.js?v=1.2.6"></script>
-  <script src="js/app.js?v=1.2.6"></script>
+  <script src="js/astro.js?v=1.3.0"></script>
+  <script src="js/forecast-model.js?v=1.3.0"></script>
+  <script src="js/lightpollution.js?v=1.3.0"></script>
+  <script src="js/app.js?v=1.3.0"></script>
 </body>
 </html>
