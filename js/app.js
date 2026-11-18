@@ -16,7 +16,7 @@
     'wind_speed_850hPa', 'wind_direction_850hPa', 'wind_speed_500hPa', 'wind_direction_500hPa',
     'wind_speed_300hPa', 'wind_direction_300hPa', 'wind_speed_200hPa'];
   const SM = window.SkyModel;
-  const APP_VERSION = '1.3.0';
+  const APP_VERSION = '1.4.0';
 
   const state = {
     lat: null, lon: null,
@@ -62,7 +62,14 @@
     attribution: 'Light pollution: <a href="https://djlorenz.github.io/astronomy/lp/" target="_blank" rel="noopener">D. Lorenz atlas ' + window.LightPollution.YEAR + '</a>',
   });
   let mapQuality = 'standard';
-  try { mapQuality = localStorage.getItem('astrosite.quality') === 'high' ? 'high' : 'standard'; } catch (e) { /* ignore */ }
+  let smoothMapPref = false, smoothDataPref = false;
+  try {
+    mapQuality = localStorage.getItem('astrosite.quality') === 'high' ? 'high' : 'standard';
+    smoothMapPref = localStorage.getItem('astrosite.smoothMap') === '1';
+    smoothDataPref = localStorage.getItem('astrosite.smoothData') === '1';
+  } catch (e) { /* ignore */ }
+  const smoothMap = () => mapQuality === 'high' && smoothMapPref;
+  const smoothData = () => mapQuality === 'high' && smoothDataPref;
   const tileLon = (x, z) => (x / Math.pow(2, z)) * 360 - 180;
   const tileLat = (y, z) => { const n = Math.PI - (2 * Math.PI * y) / Math.pow(2, z); return (180 / Math.PI) * Math.atan(Math.sinh(n)); };
   const LPHQ = L.GridLayer.extend({
@@ -70,7 +77,7 @@
       const c = document.createElement('canvas');
       c.width = 256; c.height = 256;
       const z = coords.z;
-      window.LightPollution.renderHQ(c, (px) => tileLon(coords.x + px / 256, z), (py) => tileLat(coords.y + py / 256, z))
+      window.LightPollution.renderHQ(c, (px) => tileLon(coords.x + px / 256, z), (py) => tileLat(coords.y + py / 256, z), 256, smoothMap())
         .then(() => done(null, c), (err) => done(err, c));
       return c;
     },
@@ -79,7 +86,10 @@
   const lpHQ = new LPHQ({ pane: 'lpPane', minZoom: 9, maxZoom: 19, opacity: 0.5, tileSize: 256, updateWhenZooming: false, keepBuffer: 1 });
   function lpSetOn(on) {
     const high = mapQuality === 'high';
-    lpLayer.options.maxZoom = high ? 8 : 19;
+    // Smooth gradients are drawn from raw data from zoom 6 up; otherwise raw rendering starts where the images run out (zoom 9)
+    const hqFrom = smoothMap() ? 6 : 9;
+    lpLayer.options.maxZoom = high ? hqFrom - 1 : 19;
+    lpHQ.options.minZoom = hqFrom;
     if (map.hasLayer(lpLayer)) map.removeLayer(lpLayer);
     if (map.hasLayer(lpHQ)) map.removeLayer(lpHQ);
     if (on) { lpLayer.addTo(map); if (high) lpHQ.addTo(map); }
@@ -887,6 +897,23 @@
      lightness of one blue hue — darker = better. Any hour whose value is missing or relies on an estimated
      input is drawn solid red instead, with no gradient. */
   const isNight = () => document.body.classList.contains('night');
+  function hslRgb(h, s2, l) {
+    s2 /= 100; l /= 100;
+    const k = (n) => (n + h / 30) % 12;
+    const a = s2 * Math.min(l, 1 - l);
+    const f = (n) => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+    return [Math.round(f(0) * 255), Math.round(f(8) * 255), Math.round(f(4) * 255)];
+  }
+  const hexRgb = (hx) => [parseInt(hx.slice(1, 3), 16), parseInt(hx.slice(3, 5), 16), parseInt(hx.slice(5, 7), 16)];
+  const rgbStr = (c) => `rgb(${c[0]},${c[1]},${c[2]})`;
+  const mixRgb = (a, b) => [Math.round((a[0] + b[0]) / 2), Math.round((a[1] + b[1]) / 2), Math.round((a[2] + b[2]) / 2)];
+  function shadeRgb(q, limited) {
+    const night = isNight();
+    if (limited) return hexRgb(night ? '#ff1f1f' : '#b3261e');
+    if (q == null || !isFinite(q)) return null;
+    q = Math.max(0, Math.min(1, q));
+    return night ? hslRgb(0, 100, 46 - q * 42) : hslRgb(216, 25 + q * 50, 88 - q * 70);
+  }
   function shade(q, limited) {
     const night = isNight();
     if (limited) return night ? { bg: '#ff1f1f', fg: '#000' } : { bg: '#b3261e', fg: '#fff' };
@@ -1100,16 +1127,27 @@
       const chk = state.fcEdit ? `<input type="checkbox" class="rowchk" data-row="${r.key}" ${off ? '' : 'checked'} aria-label="Show ${esc(r.label)}">` : '';
       lbl += `<tr class="fc-row${off ? ' off' : ''}" data-row="${r.key}"><th class="fc-lbl">${chk}<a href="${esc(r.src())}" target="_blank" rel="noopener" title="Open the data source for ${esc(r.label)} in a new tab">${esc(r.label)}</a></th><th class="fc-sub">${esc(sub)}</th></tr>`;
       html += `<tr class="fc-row${off ? ' off' : ''}" data-row="${r.key}">`;
+      // Per-row colours (for smooth gradients each cell blends from the midpoint with its left neighbour,
+      // through its own exact colour at its centre, to the midpoint with its right neighbour)
+      const cellsRow = hours.map((h) => r.cell(h));
+      const rgbRow = smoothData() ? cellsRow.map((c) => (c.nodata ? shadeRgb(null, true) : shadeRgb(c.q, c.lim))) : null;
+      const bgFor = (i, flat) => {
+        if (!rgbRow || !rgbRow[i]) return flat;
+        const cur = rgbRow[i];
+        const left = rgbRow[i - 1] ? mixRgb(rgbRow[i - 1], cur) : cur;
+        const right = rgbRow[i + 1] ? mixRgb(cur, rgbRow[i + 1]) : cur;
+        return `linear-gradient(90deg,${rgbStr(left)} 0%,${rgbStr(cur)} 50%,${rgbStr(right)} 100%)`;
+      };
       hours.forEach((h, i) => {
-        const c = r.cell(h);
+        const c = cellsRow[i];
         if (c.nodata) {
           const nd = shade(null, true);
-          html += `<td data-c="${i}" class="nd${ds(i)}" style="background:${nd.bg};color:${nd.fg}">–</td>`;
+          html += `<td data-c="${i}" class="nd${ds(i)}" style="background:${bgFor(i, nd.bg)};color:${nd.fg}">–</td>`;
           return;
         }
         const col = shade(c.q, c.lim);
         const cls = [c.mark ? (c.warn2 ? 'mk2' : 'mk') : '', c.lim ? 'lim' : '', dayStart.has(i) ? 'ds' : ''].filter(Boolean).join(' ');
-        const style = col ? ` style="background:${col.bg};color:${col.fg}"` : '';
+        const style = col ? ` style="background:${bgFor(i, col.bg)};color:${col.fg}"` : '';
         html += `<td data-c="${i}"${cls ? ` class="${cls}"` : ''}${style}>${c.html || esc(c.txt || '')}</td>`;
       });
       html += '</tr>';
@@ -1754,6 +1792,9 @@
     $('#favSummary').textContent = favs.length ? `${favs.length} saved location${favs.length === 1 ? '' : 's'}` : 'None saved';
     $$('#unitsSeg button').forEach((b) => b.classList.toggle('on', b.dataset.units === state.units));
     $$('#qualitySeg button').forEach((b) => b.classList.toggle('on', b.dataset.quality === mapQuality));
+    $$('.hq-only').forEach((el) => { el.hidden = mapQuality !== 'high'; });
+    $('#smoothMapChk').checked = smoothMapPref;
+    $('#smoothDataChk').checked = smoothDataPref;
     $('#appVersion').textContent = APP_VERSION;
   }
   $$('#unitsSeg button').forEach((b) => b.addEventListener('click', () => setUnits(b.dataset.units)));
@@ -1761,9 +1802,28 @@
     mapQuality = b.dataset.quality === 'high' ? 'high' : 'standard';
     try { localStorage.setItem('astrosite.quality', mapQuality); } catch (e) { /* ignore */ }
     $$('#qualitySeg button').forEach((x) => x.classList.toggle('on', x.dataset.quality === mapQuality));
-    if (map.hasLayer(lpLayer)) lpSetOn(true);
-    if (wx.key) { wx.grid = null; scheduleWx(0); }
+    refreshSettings();
+    applySmoothing({ refetch: true });
   }));
+  function applySmoothing(opts = {}) {
+    if (map.hasLayer(lpLayer)) { lpSetOn(true); lpHQ.redraw(); }
+    if (wx.key) { if (opts.refetch) wx.grid = null; scheduleWx(0); }
+    if (state.fc && !$('#tab-tonight').hidden) {
+      const sc = $('.fc-scroll'); const sl = sc ? sc.scrollLeft : 0;
+      renderTonight();
+      if ($('.fc-scroll')) $('.fc-scroll').scrollLeft = sl;
+    }
+  }
+  $('#smoothMapChk').addEventListener('change', (e) => {
+    smoothMapPref = e.target.checked;
+    try { localStorage.setItem('astrosite.smoothMap', smoothMapPref ? '1' : '0'); } catch (err) { /* ignore */ }
+    applySmoothing();
+  });
+  $('#smoothDataChk').addEventListener('change', (e) => {
+    smoothDataPref = e.target.checked;
+    try { localStorage.setItem('astrosite.smoothData', smoothDataPref ? '1' : '0'); } catch (err) { /* ignore */ }
+    applySmoothing();
+  });
   $('#resetWidth').addEventListener('click', () => { setPanelWidth(PANEL_DEFAULT, true); toast('Sidebar width reset'); });
   $('#cfgExport').addEventListener('click', () => {
     const settings = {};
@@ -2210,7 +2270,8 @@
         for (let x = 0; x < cv.width; x++) {
           const fx = (x + 0.5) / S - 0.5, c1 = Math.floor(fx), tx = fx - c1;
           const rowv = [-1, 0, 1, 2].map((dr) => crs(qAt(r1 + dr, c1 - 1), qAt(r1 + dr, c1), qAt(r1 + dr, c1 + 1), qAt(r1 + dr, c1 + 2), tx));
-          const q = crs(rowv[0], rowv[1], rowv[2], rowv[3], ty);
+          let q = crs(rowv[0], rowv[1], rowv[2], rowv[3], ty);
+          if (!smoothMap()) q = Math.round(Math.max(0, Math.min(1, q)) * 10) / 10; // stepped colour bands
           const near = cells[Math.max(0, Math.min(g.rows - 1, Math.round(fy))) * g.cols + Math.max(0, Math.min(g.cols - 1, Math.round(fx)))];
           ctx.fillStyle = (near.nodata ? shade(null, true) : shade(Math.max(0, Math.min(1, q)), near.lim)).bg;
           ctx.fillRect(x, y, 1, 1);

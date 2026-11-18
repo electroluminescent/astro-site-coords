@@ -14,7 +14,9 @@ latitude / longitude / elevation format that astrophotography software asks for 
     dew point, humidity) sampled on a grid across the view, following the hour selected in the Night forecast (◀ ▶ on the map caption).
 - **Home** tab — every saved location with a **next 24 h** gradient (hour ticks) and a **next 14 nights** gradient (day ticks)
   combining cloud cover, transparency and seeing into one colour; click to open that hour/night. Display preferences,
-  **map quality** (High = spline-interpolated light pollution beyond zoom 8 and forecast overlays), and all import/export/backup.
+  **map quality** (High = spline-interpolated light pollution beyond zoom 8 and forecast overlays) with two High-only options —
+  *smooth map gradients* (continuous colours; each zone/value keeps its exact colour at its midpoint, blending between neighbours; raw-data
+  rendering from zoom 6) and *smooth table gradients* (forecast rows blend between cell centres) — and all import/export/backup.
 - **Search** by place name or address (Nominatim), or paste coordinates in almost any form
   (`43.589, -79.644` · `43°35'20.4"N 79°38'38.4"W` · `N43 35 20 W79 38 38` · `43:35:20, -79:38:38` · Maidenhead `FN03eo`).
 - **Device GPS** via the browser Geolocation API (high-accuracy fix with network fallback, accuracy shown, GPS altitude used when reported).

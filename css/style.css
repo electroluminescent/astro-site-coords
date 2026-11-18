@@ -658,3 +658,7 @@ body.night .wx-lbl span { color: #ffb3b3; }
 .set-row > span:first-child small { display: block; font-size: 11px; margin-top: 1px; }
 .hl-axis-track { overflow: visible; }
 .hl-axis-track span:first-of-type b { transform: none; }
+
+.set-row.sub-set { padding-left: 14px; border-left: 2px solid var(--line); margin-left: 2px; }
+.set-row[hidden] { display: none; }
+.set-row .sw { margin-right: 0; }

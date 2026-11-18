@@ -92,13 +92,32 @@
   }
   const toRatio = (x) => (5 / 195) * (Math.exp(0.0195 * x) - 1);
   const ZONE_RGB = ZONES.map((z) => [z[0], parseInt(z[2].slice(1, 3), 16), parseInt(z[2].slice(3, 5), 16), parseInt(z[2].slice(5, 7), 16)]);
+  // Value-space (compressed atlas value) centre of each zone: midpoint between its lower and upper bounds.
+  const toX = (ratio) => Math.log(ratio * 39 + 1) / 0.0195;      // inverse of toRatio
+  const ZONE_CENTERS = (() => {
+    const bounds = [0, ...ZONES.slice(0, -1).map((z) => toX(z[0]))];
+    const centers = bounds.slice(0, -1).map((b, k) => (b + bounds[k + 1]) / 2);
+    const lastW = bounds[bounds.length - 1] - bounds[bounds.length - 2];
+    centers.push(bounds[bounds.length - 1] + lastW / 2);
+    return centers;
+  })();
+  function smoothColour(x) {
+    const C = ZONE_CENTERS;
+    if (x <= C[0]) return ZONE_RGB[0];
+    if (x >= C[C.length - 1]) return ZONE_RGB[C.length - 1];
+    let k = 0;
+    while (k < C.length - 2 && x > C[k + 1]) k++;
+    const t = (x - C[k]) / (C[k + 1] - C[k]);
+    const a = ZONE_RGB[k], b = ZONE_RGB[k + 1];
+    return [0, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t, a[3] + (b[3] - a[3]) * t];
+  }
   const cr = (p0, p1, p2, p3, t) => {
     const t2 = t * t, t3 = t2 * t;
     return 0.5 * ((2 * p1) + (-p0 + p2) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 + (-p0 + 3 * p1 - 3 * p2 + p3) * t3);
   };
 
   // Render one 256-px web-mercator tile into a canvas. lonAt(px) / latAt(py) map pixel centres to degrees.
-  async function renderHQ(canvas, lonAt, latAt, size = 256) {
+  async function renderHQ(canvas, lonAt, latAt, size = 256, smooth = false) {
     const lons = new Float64Array(size), lats = new Float64Array(size);
     for (let i = 0; i < size; i++) { lons[i] = lonAt(i + 0.5); lats[i] = latAt(i + 0.5); }
     const fx = (lon) => mod(lon + 180, 360) * 120 - 0.5;
@@ -106,7 +125,7 @@
     let gx0 = Math.floor(Math.min(fx(lons[0]), fx(lons[size - 1]))) - 2, gx1 = Math.ceil(Math.max(fx(lons[0]), fx(lons[size - 1]))) + 2;
     const gyA = Math.floor(fy(Math.min(lats[0], lats[size - 1]))) - 2, gyB = Math.ceil(fy(Math.max(lats[0], lats[size - 1]))) + 2;
     if (gyB < 0 || gyA > 28 * 600 - 1) return false;               // outside atlas coverage
-    if (gx1 - gx0 > 2400 || gyB - gyA > 2400) return false;         // too large: let the image tiles handle low zooms
+    if (gx1 - gx0 > 1500 || gyB - gyA > 1500) return false;         // too large: let the image tiles handle low zooms
     const W = gx1 - gx0 + 1, Hh = gyB - gyA + 1;
     const win = new Float32Array(W * Hh).fill(NaN);
     const need = new Map();
@@ -150,9 +169,13 @@
         const v = cr(c0, c1, c2, c3, ty);
         const o = (py * size + px) * 4;
         if (!isFinite(v)) { data[o + 3] = 0; continue; }
-        const ratio = toRatio(v);
-        let z = ZONE_RGB[ZONE_RGB.length - 1];
-        for (let k = 0; k < ZONE_RGB.length; k++) { if (ratio < ZONE_RGB[k][0]) { z = ZONE_RGB[k]; break; } }
+        let z;
+        if (smooth) z = smoothColour(v);
+        else {
+          const ratio = toRatio(v);
+          z = ZONE_RGB[ZONE_RGB.length - 1];
+          for (let k = 0; k < ZONE_RGB.length; k++) { if (ratio < ZONE_RGB[k][0]) { z = ZONE_RGB[k]; break; } }
+        }
         data[o] = z[1]; data[o + 1] = z[2]; data[o + 2] = z[3]; data[o + 3] = 255;
       }
     }
@@ -163,7 +186,7 @@
   const overlayUrl = `${BASE}/image_tiles/tiles${YEAR}/tile_{z}_{x}_{y}.png`;
   const errorTile = `${BASE}/image_tiles/tiles${YEAR}/black.png`;
 
-  const api = { lookup, renderHQ, YEAR, ZONES, overlayUrl, errorTile, infoUrl: `${BASE}/lp/`, colorsUrl: `${BASE}/lp/colors.html`, bortleUrl: `${BASE}/lp/bortle.html` };
+  const api = { lookup, renderHQ, _smoothColour: smoothColour, _zoneCenters: ZONE_CENTERS, YEAR, ZONES, overlayUrl, errorTile, infoUrl: `${BASE}/lp/`, colorsUrl: `${BASE}/lp/colors.html`, bortleUrl: `${BASE}/lp/bortle.html` };
   root.LightPollution = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);

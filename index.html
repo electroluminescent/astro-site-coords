@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/style.css?v=1.3.0">
+  <link rel="stylesheet" href="css/style.css?v=1.4.0">
 </head>
 <body>
   <header class="topbar">
@@ -113,6 +113,10 @@
               <button data-quality="standard">Standard</button>
               <button data-quality="high">High</button>
             </div></div>
+          <div class="set-row hq-only sub-set" hidden><span>Smooth map gradients<small class="muted">Continuous colours; each known value keeps its exact colour, blending at midpoints</small></span>
+            <label class="sw"><input type="checkbox" id="smoothMapChk"><span></span></label></div>
+          <div class="set-row hq-only sub-set" hidden><span>Smooth table gradients<small class="muted">Forecast rows blend between cell centres</small></span>
+            <label class="sw"><input type="checkbox" id="smoothDataChk"><span></span></label></div>
           <div class="set-row"><span>Sidebar width</span><button class="btn small" id="resetWidth">Reset to default</button></div>
         </section>
         <section class="set-group">
@@ -160,9 +164,9 @@
 
   <script src="vendor/leaflet/leaflet.js"></script>
   <script src="vendor/suncalc/suncalc.js"></script>
-  <script src="js/astro.js?v=1.3.0"></script>
-  <script src="js/forecast-model.js?v=1.3.0"></script>
-  <script src="js/lightpollution.js?v=1.3.0"></script>
-  <script src="js/app.js?v=1.3.0"></script>
+  <script src="js/astro.js?v=1.4.0"></script>
+  <script src="js/forecast-model.js?v=1.4.0"></script>
+  <script src="js/lightpollution.js?v=1.4.0"></script>
+  <script src="js/app.js?v=1.4.0"></script>
 </body>
 </html>
