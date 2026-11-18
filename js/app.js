@@ -16,7 +16,7 @@
     'wind_speed_850hPa', 'wind_direction_850hPa', 'wind_speed_500hPa', 'wind_direction_500hPa',
     'wind_speed_300hPa', 'wind_direction_300hPa', 'wind_speed_200hPa'];
   const SM = window.SkyModel;
-  const APP_VERSION = '1.5.0';
+  const APP_VERSION = '1.6.0';
 
   const state = {
     lat: null, lon: null,
@@ -897,36 +897,30 @@
      lightness of one blue hue — darker = better. Any hour whose value is missing or relies on an estimated
      input is drawn solid red instead, with no gradient. */
   const isNight = () => document.body.classList.contains('night');
-  function hslRgb(h, s2, l) {
-    s2 /= 100; l /= 100;
-    const k = (n) => (n + h / 30) % 12;
-    const a = s2 * Math.min(l, 1 - l);
-    const f = (n) => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
-    return [Math.round(f(0) * 255), Math.round(f(8) * 255), Math.round(f(4) * 255)];
-  }
-  const hexRgb = (hx) => [parseInt(hx.slice(1, 3), 16), parseInt(hx.slice(3, 5), 16), parseInt(hx.slice(5, 7), 16)];
-  const rgbStr = (c) => `rgb(${c[0]},${c[1]},${c[2]})`;
-  const mixRgb = (a, b) => [Math.round((a[0] + b[0]) / 2), Math.round((a[1] + b[1]) / 2), Math.round((a[2] + b[2]) / 2)];
+  // Colour scales are defined in OKLCH so lightness steps evenly; every blend happens in OKLab.
+  const CK = window.ColorOK;
+  const LIM_DAY = CK.hex('#b3261e'), LIM_NIGHT = CK.hex('#ff1f1f');
+  const scaleCache = new Map();
   function shadeRgb(q, limited) {
     const night = isNight();
-    if (limited) return hexRgb(night ? '#ff1f1f' : '#b3261e');
+    if (limited) return night ? LIM_NIGHT : LIM_DAY;
     if (q == null || !isFinite(q)) return null;
     q = Math.max(0, Math.min(1, q));
-    return night ? hslRgb(0, 100, 46 - q * 42) : hslRgb(216, 25 + q * 50, 88 - q * 70);
-  }
-  function shade(q, limited) {
-    const night = isNight();
-    if (limited) return night ? { bg: '#ff1f1f', fg: '#000' } : { bg: '#b3261e', fg: '#fff' };
-    if (q == null || !isFinite(q)) return null;
-    q = Math.max(0, Math.min(1, q));
-    if (night) {
-      // monochrome red: worse = brighter red, better = darker (keeps "darker is better")
-      const L = 46 - q * 42; // 46% → 4%
-      return { bg: `hsl(0 100% ${L}%)`, fg: L > 26 ? '#000' : '#ffa0a0' };
+    const key = `${night ? 'n' : 'd'}${Math.round(q * 1000)}`;
+    if (!scaleCache.has(key)) {
+      // worse → near-white (day) / bright red (night); better → deep blue / near-black red
+      scaleCache.set(key, night ? CK.oklchToRgb(0.62 - q * 0.46, 0.25, 27) : CK.oklchToRgb(0.95 - q * 0.65, 0.015 + q * 0.115, 258));
     }
-    const L = 88 - q * 70; // 88% (worst, near white) → 18% (best)
-    const S = 25 + q * 50;
-    return { bg: `hsl(216 ${S}% ${L}%)`, fg: L < 55 ? '#eef3ff' : '#0b1220' };
+    return scaleCache.get(key);
+  }
+  const rgbStr = CK.str;
+  const mixRgb = (a, b, t = 0.5) => CK.mix(a, b, t);
+  function shade(q, limited) {
+    const c = shadeRgb(q, limited);
+    if (!c) return null;
+    const L = CK.rgbToOklab(c)[0];
+    const fg = isNight() ? (L > 0.45 ? '#000' : '#ffa0a0') : (L < 0.62 ? '#eef3ff' : '#0b1220');
+    return { bg: rgbStr(c), fg, rgb: c };
   }
   const clamp01 = (x) => Math.max(0, Math.min(1, x));
 
@@ -1136,7 +1130,8 @@
         const cur = rgbRow[i];
         const left = rgbRow[i - 1] ? mixRgb(rgbRow[i - 1], cur) : cur;
         const right = rgbRow[i + 1] ? mixRgb(cur, rgbRow[i + 1]) : cur;
-        return `linear-gradient(90deg,${rgbStr(left)} 0%,${rgbStr(cur)} 50%,${rgbStr(right)} 100%)`;
+        const stops = `${rgbStr(left)} 0%,${rgbStr(cur)} 50%,${rgbStr(right)} 100%`;
+        return `linear-gradient(90deg,${stops});background:linear-gradient(in oklab 90deg,${stops})`;
       };
       hours.forEach((h, i) => {
         const c = cellsRow[i];
@@ -1663,7 +1658,13 @@
     ctx.fillRect(0, 0, w, hgt);
     if (stops.length) {
       const g = ctx.createLinearGradient(0, 0, w, 0);
-      stops.forEach((st) => g.addColorStop(Math.max(0, Math.min(1, st.x)), shade(st.q, st.lim).bg));
+      const pts = stops.map((st) => ({ x: Math.max(0, Math.min(1, st.x)), c: shadeRgb(st.q, st.lim) }));
+      // canvas gradients interpolate in sRGB, so add OKLab-blended sub-stops between data points
+      pts.forEach((pt, k) => {
+        g.addColorStop(pt.x, rgbStr(pt.c));
+        const nx = pts[k + 1];
+        if (nx) for (let j = 1; j < 6; j++) g.addColorStop(pt.x + ((nx.x - pt.x) * j) / 6, rgbStr(mixRgb(pt.c, nx.c, j / 6)));
+      });
       ctx.fillStyle = g;
       ctx.fillRect(0, 0, w, hgt);
     }
@@ -2043,13 +2044,17 @@
   const WX_KEYS = ['cloud', 'cloudLow', 'cloudMid', 'cloudHigh', 'trans', 'see', 'fog', 'wind', 'gust', 'temp', 'dew', 'rh'];
   const WX_NAMES = { cloud: 'Cloud cover', cloudLow: 'Low cloud', cloudMid: 'Mid cloud', cloudHigh: 'High cloud', trans: 'Transparency', see: 'Seeing', fog: 'Mist / fog', wind: 'Wind', gust: 'Gusts', temp: 'Temperature', dew: 'Dew point', rh: 'Humidity' };
   // keys: active forecast layers in the order they were switched on (last = top, carries value labels)
-  const wx = { keys: [], layers: new Map(), opacity: 0.65, vals: false, grid: null, labels: null, req: 0, manualTime: null, timer: 0, loading: false };
+  const wx = { keys: [], layers: new Map(), vals: false, grid: null, labels: null, req: 0, manualTime: null, timer: 0, loading: false };
+  // Opacity per overlay (0–1), default 50 %, remembered (and exported with the config)
+  let layerOpacity = {};
+  try { layerOpacity = JSON.parse(localStorage.getItem('astrosite.layerOpacity') || '{}') || {}; } catch (e) { layerOpacity = {}; }
+  const opOf = (k) => (isFinite(layerOpacity[k]) ? layerOpacity[k] : 0.5);
+  const saveOpacity = () => { try { localStorage.setItem('astrosite.layerOpacity', JSON.stringify(layerOpacity)); } catch (e) { /* ignore */ } };
   const wxActive = () => wx.keys.length > 0;
   try {
     const saved = JSON.parse(localStorage.getItem('astrosite.wxLayers') || 'null');
     const legacy = localStorage.getItem('astrosite.wxLayer');
     wx.keys = (Array.isArray(saved) ? saved : legacy ? [legacy] : []).filter((k) => WX_KEYS.includes(k));
-    wx.opacity = parseFloat(localStorage.getItem('astrosite.wxOpacity')) || 0.65;
     wx.vals = localStorage.getItem('astrosite.wxVals') === '1';
   } catch (e) { /* ignore */ }
   const saveWxKeys = () => { try { localStorage.setItem('astrosite.wxLayers', JSON.stringify(wx.keys)); localStorage.removeItem('astrosite.wxLayer'); } catch (e) { /* ignore */ } };
@@ -2057,50 +2062,70 @@
   const LayersControl = L.Control.extend({
     options: { position: 'topright' },
     onAdd() {
-      const div = L.DomUtil.create('div', 'leaflet-bar lp-ctl wx-ctl');
+      const div = L.DomUtil.create('div', 'leaflet-bar wx-ctl');
+      let collapsed = false;
+      try { collapsed = localStorage.getItem('astrosite.layersCollapsed') === '1'; } catch (e) { /* ignore */ }
+      const row = (attr, k, label, title) => `<tr data-row="${k}"><td><button type="button" class="lyr" ${attr}="${k}" aria-pressed="false"${title ? ` title="${esc(title)}"` : ''}>${label}</button></td>
+        <td><input type="range" min="0" max="100" value="${Math.round(opOf(k) * 100)}" data-op="${k}" aria-label="${esc(label)} opacity" title="Opacity"></td></tr>`;
       div.innerHTML = `
-        <div class="wx-sec">Map</div>
-        <button type="button" class="lyr" data-lyr="lp" aria-pressed="false" title="Light-pollution atlas">Light pollution</button>
-        <div class="lp-extra" data-for="lp" hidden><input type="range" min="10" max="100" value="50" aria-label="Light-pollution opacity"><a href="${window.LightPollution.colorsUrl}" target="_blank" rel="noopener">key</a></div>
-        <div class="wx-sec">Forecast <span class="muted">· selected hour</span></div>
-        <div class="wx-btns">${WX_KEYS.map((k) => `<button type="button" class="lyr" data-wx="${k}" aria-pressed="${wx.keys.includes(k)}"${k === 'cloud' ? ' title="At the current hour this shows live satellite infrared imagery"' : ''}>${WX_NAMES[k]}</button>`).join('')}</div>
-        <div class="lp-extra" data-for="wx" hidden><input type="range" min="10" max="100" value="${Math.round(wx.opacity * 100)}" aria-label="Forecast overlay opacity"><label class="chk"><input type="checkbox" class="wx-vals" ${wx.vals ? 'checked' : ''}> values</label></div>`;
+        <button type="button" class="lyr-title" aria-expanded="${!collapsed}">Layers <span class="chev" aria-hidden="true"></span></button>
+        <div class="lyr-body"${collapsed ? ' hidden' : ''}>
+          <table class="lyr-table"><tbody>
+            ${row('data-lyr', 'lp', 'Light pollution', 'Light Pollution Atlas 2025 (D. Lorenz)').replace('<tr ', '<tr class="lyr-lp" ')}
+            <tr class="lyr-head"><td colspan="2">Forecast <span class="muted">· selected hour</span></td></tr>
+            ${WX_KEYS.map((k) => row('data-wx', k, WX_NAMES[k], k === 'cloud' ? 'At the current hour this shows live satellite infrared imagery' : '')).join('')}
+            <tr class="lyr-foot"><td colspan="2"><div class="lyr-foot-in"><label class="chk"><input type="checkbox" class="wx-vals" ${wx.vals ? 'checked' : ''}> Values on top layer</label><a href="${window.LightPollution.colorsUrl}" target="_blank" rel="noopener" title="Light-pollution colour key">LP key</a></div></td></tr>
+          </tbody></table>
+        </div>`;
       L.DomEvent.disableClickPropagation(div);
       L.DomEvent.disableScrollPropagation(div);
-      const extra = (k) => div.querySelector(`.lp-extra[data-for="${k}"]`);
+      const title = div.querySelector('.lyr-title'), body = div.querySelector('.lyr-body');
+      title.addEventListener('click', () => {
+        const open = body.hidden;
+        body.hidden = !open; title.setAttribute('aria-expanded', open);
+        try { localStorage.setItem('astrosite.layersCollapsed', open ? '0' : '1'); } catch (e) { /* ignore */ }
+      });
       const lpBtn = div.querySelector('[data-lyr="lp"]');
       const setLp = (on) => {
         lpSetOn(on);
-        lpBtn.setAttribute('aria-pressed', on); extra('lp').hidden = !on;
+        lpBtn.setAttribute('aria-pressed', on);
         try { localStorage.setItem('astrosite.lpmap', on ? '1' : '0'); } catch (e) { /* ignore */ }
       };
       lpBtn.addEventListener('click', () => setLp(!map.hasLayer(lpLayer)));
-      extra('lp').querySelector('input').addEventListener('input', (e) => { lpSetOpacity(e.target.value / 100); try { localStorage.setItem('astrosite.lpopacity', e.target.value); } catch (err) { /* ignore */ } });
-      div.querySelectorAll('[data-wx]').forEach((b) => b.addEventListener('click', () => {
-        const k = b.dataset.wx;
-        if (wx.keys.includes(k)) { wx.keys = wx.keys.filter((x) => x !== k); removeWxLayer(k); }
-        else wx.keys.push(k);
-        b.setAttribute('aria-pressed', wx.keys.includes(k));
-        extra('wx').hidden = !wxActive();
-        saveWxKeys();
-        scheduleWx(0);
-      }));
-      extra('wx').querySelector('input[type=range]').addEventListener('input', (e) => {
-        wx.opacity = e.target.value / 100;
-        wx.layers.forEach((L2) => { if (L2.overlay) L2.overlay.setOpacity(wx.opacity); });
-        satLayers.forEach((l) => l.setOpacity(Math.min(1, wx.opacity + 0.1)));
-        try { localStorage.setItem('astrosite.wxOpacity', wx.opacity); } catch (err) { /* ignore */ }
+      div.querySelectorAll('[data-wx]').forEach((b) => {
+        b.setAttribute('aria-pressed', wx.keys.includes(b.dataset.wx));
+        b.addEventListener('click', () => {
+          const k = b.dataset.wx;
+          if (wx.keys.includes(k)) { wx.keys = wx.keys.filter((x) => x !== k); removeWxLayer(k); }
+          else wx.keys.push(k);
+          b.setAttribute('aria-pressed', wx.keys.includes(k));
+          saveWxKeys();
+          scheduleWx(0);
+        });
       });
-      extra('wx').querySelector('.wx-vals').addEventListener('change', (e) => {
+      div.querySelectorAll('[data-op]').forEach((r) => r.addEventListener('input', () => {
+        const k = r.dataset.op, o = r.value / 100;
+        layerOpacity[k] = o;
+        saveOpacity();
+        if (k === 'lp') lpSetOpacity(o);
+        else {
+          const st = wx.layers.get(k);
+          if (st && st.overlay) st.overlay.setOpacity(o);
+          if (k === 'cloud') satLayers.forEach((l) => l.setOpacity(o));
+        }
+      }));
+      div.querySelector('.wx-vals').addEventListener('change', (e) => {
         wx.vals = e.target.checked;
         try { localStorage.setItem('astrosite.wxVals', wx.vals ? '1' : '0'); } catch (err) { /* ignore */ }
         renderWx();
       });
-      extra('wx').hidden = !wxActive();
+      // legacy single light-pollution opacity → per-layer table
       try {
-        const lo = localStorage.getItem('astrosite.lpopacity'); if (lo) { extra('lp').querySelector('input').value = lo; lpSetOpacity(lo / 100); }
-        if (localStorage.getItem('astrosite.lpmap') === '1') setTimeout(() => setLp(true), 0);
+        const legacy = localStorage.getItem('astrosite.lpopacity');
+        if (legacy && !isFinite(layerOpacity.lp)) { layerOpacity.lp = legacy / 100; saveOpacity(); div.querySelector('[data-op="lp"]').value = legacy; }
       } catch (e) { /* ignore */ }
+      lpSetOpacity(opOf('lp'));
+      try { if (localStorage.getItem('astrosite.lpmap') === '1') setTimeout(() => setLp(true), 0); } catch (e) { /* ignore */ }
       if (wxActive()) setTimeout(() => scheduleWx(0), 0);
       return div;
     },
@@ -2326,12 +2351,12 @@
     if (!st.overlay) {
       const cv = document.createElement('canvas');
       cv.width = W; cv.height = H;
-      const ov = new CanvasOverlay('', g.bounds, { pane: 'wxPane', opacity: wx.opacity, className: 'wx-img', interactive: false });
+      const ov = new CanvasOverlay('', g.bounds, { pane: 'wxPane', opacity: opOf(k), className: 'wx-img', interactive: false });
       ov._canvas = cv;
       st.overlay = ov.addTo(map);
     } else {
       st.overlay.setBounds(g.bounds);
-      st.overlay.setOpacity(wx.opacity);
+      st.overlay.setOpacity(opOf(k));
       if (!map.hasLayer(st.overlay)) st.overlay.addTo(map);
     }
     st.overlay._canvas.style.zIndex = String(z);
@@ -2371,7 +2396,7 @@
     // Cloud cover at the current hour: live satellite infrared instead of the forecast
     if (k === 'cloud' && isNowHour(t)) {
       if (st0) { cancelAnimationFrame(st0.anim || 0); if (st0.overlay) map.removeLayer(st0.overlay); st0.shown = null; }
-      if (!map.hasLayer(satGroup)) { const ts = satTime(); satLayers.forEach((l) => { l.options.time = ts; l.setOpacity(Math.min(1, wx.opacity + 0.1)); }); satGroup.addTo(map); }
+      if (!map.hasLayer(satGroup)) { const ts = satTime(); satLayers.forEach((l) => { l.options.time = ts; l.setOpacity(opOf('cloud')); }); satGroup.addTo(map); }
       if (isTop) drawLabels(null);
       markLayer(k, false);
       return;

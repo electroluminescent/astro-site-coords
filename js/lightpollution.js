@@ -101,6 +101,8 @@
     centers.push(bounds[bounds.length - 1] + lastW / 2);
     return centers;
   })();
+  const OK = root.ColorOK || require('./color.js');
+  const ZONE_LAB = ZONE_RGB.map((z) => OK.rgbToOklab([z[1], z[2], z[3]]));
   function smoothColour(x) {
     const C = ZONE_CENTERS;
     if (x <= C[0]) return ZONE_RGB[0];
@@ -108,8 +110,10 @@
     let k = 0;
     while (k < C.length - 2 && x > C[k + 1]) k++;
     const t = (x - C[k]) / (C[k + 1] - C[k]);
-    const a = ZONE_RGB[k], b = ZONE_RGB[k + 1];
-    return [0, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t, a[3] + (b[3] - a[3]) * t];
+    // blend in OKLab so perceived lightness changes evenly between zone colours
+    const a = ZONE_LAB[k], b = ZONE_LAB[k + 1];
+    const rgb = OK.oklabToRgb([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]);
+    return [0, rgb[0], rgb[1], rgb[2]];
   }
   const cr = (p0, p1, p2, p3, t) => {
     const t2 = t * t, t3 = t2 * t;

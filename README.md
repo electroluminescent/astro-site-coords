@@ -7,8 +7,9 @@ latitude / longitude / elevation format that astrophotography software asks for 
 
 ## Features
 
-- **Map** (Leaflet) — Dark, Streets, Satellite, Terrain, plus a **layers panel** of on/off buttons:
-  - **Light pollution** (David Lorenz atlas 2025) with opacity;
+- **Map** (Leaflet) — Dark, Streets, Satellite, Terrain, plus a collapsible **Layers** table: click a name to toggle it, slider beside it
+  for its opacity (default 50 %, remembered and included in config export):
+  - **Light pollution** (David Lorenz atlas 2025);
   - **Forecast layers** — cloud cover, low/mid/high cloud, transparency, seeing, mist/fog, wind, gusts, temperature, dew point and humidity;
     any combination can be on. They're sampled on a grid across the view and follow the hour selected in the Night forecast
     (◀ ▶ on the map caption). **Cloud cover at the current hour shows live satellite infrared** (NASA GIBS: GOES-East/West, Himawari).
@@ -73,3 +74,8 @@ Cloud, visibility, wind, temperature, dew point and humidity come directly from 
 Transparency is estimated from precipitable water vapour, aerosol optical depth, high-cloud fraction and surface pressure,
 mapped onto Astrospheric's published transparency scale. Seeing is estimated from 300/200 hPa jet speed, 850→500→300 hPa
 wind shear and surface gusts. Both are estimates, not Astrospheric's proprietary model.
+
+## Colour
+
+All colour scales are defined in OKLCH and every blend (table gradients, Home strips, map overlays, smooth light-pollution zones)
+is interpolated in OKLab, so perceived lightness changes evenly from one value to the next.
