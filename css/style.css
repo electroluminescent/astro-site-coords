@@ -249,3 +249,5 @@ body.night { filter: brightness(.85); }
 }
 .btn.busy svg { animation: pulse 1s ease-in-out infinite; }
 @keyframes pulse { 50% { opacity: .3; } }
+/* Dark basemap: OSM tiles inverted (no API key needed) */
+.leaflet-tile-pane .tiles-dark { filter: invert(1) hue-rotate(180deg) brightness(.95) contrast(.9) saturate(.6); }
