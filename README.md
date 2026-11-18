@@ -7,8 +7,9 @@ latitude / longitude / elevation format that astrophotography software asks for 
 
 ## Features
 
-- **Map** (Leaflet) — Dark, Streets, Satellite, Terrain, plus a collapsible **Layers** table: click a name to toggle it, slider beside it
-  for its opacity (default 50 %, remembered and included in config export):
+- **Map** (Leaflet) with a collapsible **Layers** panel: base map (Dark, Streets, Satellite, Terrain) and an overlay table — click a name
+  to toggle it, slider beside it for its opacity (default 50 %, remembered and included in config export). Rows hidden in the forecast's
+  **Edit rows** are also removed from the overlay list:
   - **Light pollution** (David Lorenz atlas 2025);
   - **Forecast layers** — cloud cover, low/mid/high cloud, transparency, seeing, mist/fog, wind, gusts, temperature, dew point and humidity;
     any combination can be on. They're sampled on a grid across the view and follow the hour selected in the Night forecast
@@ -36,11 +37,17 @@ latitude / longitude / elevation format that astrophotography software asks for 
   Blue scale (darker = better); **solid red** = value missing or based on an estimated input. Hover any cell for its value; click a row label
   to open that row's data source. Show/hide values, **Edit rows** to choose rows, day dividers, timeline slider with day ticks, ←/→ and
   PgUp/PgDn, Prev / Tonight / Next night. Every section of the tab collapses (remembered).
-- **Saved locations** — star a site, rename it, jump between saved sites, download the list and import it again.
+- **Saved locations** (Home tab) — star a site, rename or remove it, jump between saved sites, download the list and import it again.
 - **Backup** (Home tab) — export every remembered setting (saved locations, pins, hidden rows/programs/groups, units, view, colour
   scheme, sidebar width, map layers) to a JSON file and import it to restore; reset all.
 - **Colour scheme** (Home tab) — Default or **Night** (monochrome red theme for dark adaptation; map imagery converted luminance → red).
-- Resizable sidebar (width remembered), eased transitions throughout, last site remembered.
+- Layout: full-height sidebar with its tabs at the top; the header spans the map only and drops items by priority as it narrows
+  (badge text → site coordinates → brand name). Resizable sidebar (width remembered), eased transitions and animated expand/collapse
+  throughout, last site remembered.
+- **Open-Meteo usage** — all requests are cached (forecast points on a fixed lattice, per variable, in day-aligned windows) so panning,
+  stepping hours and reloads re-use data; only the variables of active layers are fetched. On a rate-limit reply the app stops requesting
+  until the limit resets and keeps showing cached data. An estimate of today's usage is shown on the Home tab, with an optional
+  commercial API key field (uses `customer-api.open-meteo.com`).
 
 ## Conventions
 

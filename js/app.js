@@ -16,7 +16,8 @@
     'wind_speed_850hPa', 'wind_direction_850hPa', 'wind_speed_500hPa', 'wind_direction_500hPa',
     'wind_speed_300hPa', 'wind_direction_300hPa', 'wind_speed_200hPa'];
   const SM = window.SkyModel;
-  const APP_VERSION = '1.6.0';
+  const OM = window.OpenMeteo;
+  const APP_VERSION = '1.7.0';
 
   const state = {
     lat: null, lon: null,
@@ -47,7 +48,6 @@
   let savedLayer = 'Dark';
   try { savedLayer = localStorage.getItem('astrosite.layer') || 'Dark'; } catch (e) { /* ignore */ }
   (baseLayers[savedLayer] || baseLayers.Dark).addTo(map);
-  L.control.layers(baseLayers, null, { position: 'topright' }).addTo(map);
   L.control.scale({ imperial: true, metric: true }).addTo(map);
 
   // Light-pollution overlay (Lorenz atlas tiles: 1024 px, native to zoom 8)
@@ -96,7 +96,16 @@
   }
   function lpSetOpacity(o) { lpLayer.setOpacity(o); lpHQ.setOpacity(o); }
 
-  map.on('baselayerchange', (e) => { try { localStorage.setItem('astrosite.layer', e.name); } catch (err) { /* ignore */ } });
+  let currentBase = baseLayers[savedLayer] ? savedLayer : 'Dark';
+  function setBase(name) {
+    if (!baseLayers[name] || name === currentBase) return;
+    map.removeLayer(baseLayers[currentBase]);
+    baseLayers[name].addTo(map);
+    baseLayers[name].bringToBack();
+    currentBase = name;
+    try { localStorage.setItem('astrosite.layer', name); } catch (err) { /* ignore */ }
+    document.querySelectorAll('.base-seg button').forEach((b) => b.classList.toggle('on', b.dataset.base === name));
+  }
 
   const markerIcon = L.divIcon({
     className: 'site-marker',
@@ -204,14 +213,17 @@
   async function fetchSiteData(seq, wantElev) {
     const { lat, lon } = state;
     const q = `latitude=${lat.toFixed(5)}&longitude=${lon.toFixed(5)}`;
-    const elevP = fetch(`${OPEN_METEO}/elevation?${q}`).then((r) => (r.ok ? r.json() : null)).catch(() => null);
-    const metaP = fetch(`${OPEN_METEO}/forecast?${q}&timezone=auto&forecast_days=${FC_DAYS}&wind_speed_unit=ms&hourly=${FC_VARS.join(',')}`)
-      .then((r) => (r.ok ? r.json() : null)).catch(() => null);
-    const aqP = fetch(`${AIR_QUALITY}?${q}&timezone=auto&forecast_days=7&hourly=aerosol_optical_depth`)
-      .then((r) => (r.ok ? r.json() : null)).catch(() => null);
-
-    const [elev, meta, aq] = await Promise.all([elevP, metaP, aqP]);
+    const k3 = `${lat.toFixed(3)},${lon.toFixed(3)}`;
+    const soft = (p) => p.catch((err) => { if (!(err && err.limit)) console.warn(err); return { data: null, error: err }; });
+    const [elevR, metaR, aqR] = await Promise.all([
+      soft(OM.cached(`elev.${lat.toFixed(4)},${lon.toFixed(4)}`, Infinity, () => OM.request('elevation', q, { locations: 1, vars: 1, days: 1 }))),
+      soft(OM.cached(`site.${k3}`, 3600000, () => OM.request('forecast', `${q}&timezone=auto&forecast_days=${FC_DAYS}&wind_speed_unit=ms&hourly=${FC_VARS.join(',')}`, { locations: 1, vars: FC_VARS.length, days: FC_DAYS }))),
+      soft(OM.cached(`siteaq.${k3}`, 3600000, () => OM.request('aq', `${q}&timezone=auto&forecast_days=7&hourly=aerosol_optical_depth`, { locations: 1, vars: 1, days: 7 }))),
+    ]);
     if (seq !== fetchSeq) return;
+    const elev = elevR.data, meta = metaR.data, aq = aqR.data;
+    state.fcStale = !!(metaR.stale || metaR.error);
+    state.fcError = metaR.error ? metaR.error.message : null;
     const dem = elev && Array.isArray(elev.elevation) && isFinite(elev.elevation[0]) ? elev.elevation[0] : null;
     state.demElev = dem;
     if (wantElev) {
@@ -588,7 +600,7 @@
     let html = pinnedRows.length ? `<div class="vgroup pinned-group"><h3>Pinned</h3><table class="vals"><tbody>${pinnedRows.map((r) => rowHtml(r)).join('')}</tbody></table></div>` : '';
     html += groups.map((g) => `
       <div class="vgroup${typeHidden.has(g.title) ? ' off' : ''}"><h3>${coordEdit ? `<label class="sw"><input type="checkbox" data-toggle="${esc(g.title)}" ${typeHidden.has(g.title) ? '' : 'checked'}><span></span></label>` : ''}${esc(g.title)}</h3>
-        <table class="vals"><tbody>${g.rows.map((r) => rowHtml(r)).join('')}</tbody></table>
+        <div class="pc-body"><div class="pc-inner"><table class="vals"><tbody>${g.rows.map((r) => rowHtml(r)).join('')}</tbody></table></div></div>
       </div>`).join('');
     if (!groups.length && !pinnedRows.length) html = '<p class="muted pad">All groups are hidden. Use Edit to choose which to show.</p>';
     box.innerHTML = html;
@@ -790,9 +802,11 @@
       return `
       <section class="pcard${on ? '' : ' off'}${isPinned ? ' pinned' : ''}">
         <header>${coordEdit ? `<label class="sw"><input type="checkbox" data-toggle="${esc(p.name)}" ${on ? 'checked' : ''}><span></span></label>` : ''}<h4>${esc(p.name)}</h4>${pinBtn('prog', p.name, isPinned, p.name)}</header>
+        <div class="pc-body"><div class="pc-inner">
         <div class="where">${esc(p.where)}</div>
         ${p.rows ? `<table class="vals"><tbody>${p.rows.map(([key, field]) => `<tr><td class="k">${esc(FM[key].label)}${field ? `<code class="field" title="Field / keyword name in ${esc(p.name)}">${esc(field)}</code>` : ''}</td><td class="v" title="Click to copy">${esc(FM[key].v)}</td></tr>`).join('')}</tbody></table>` : ''}
         ${p.snippet ? `<pre class="snip" title="Click to copy">${esc(p.snippet)}</pre>` : ''}
+        </div></div>
       </section>`;
     };
     box.innerHTML = (pinned.length ? `<div class="pin-head">Pinned</div>${pinned.map(card).join('')}${rest.length ? '<div class="pin-head">Other programs</div>' : ''}` : '') + rest.map(card).join('');
@@ -1029,9 +1043,10 @@
 
   /* Collapsible sections in the forecast tab (state remembered) */
   const collapsedSecs = loadSet('astrosite.collapsed');
-  function csWrap(id, title, body) {
-    const c = collapsedSecs.has(id);
-    return `<section class="cs${c ? ' collapsed' : ''}" data-sec="${id}">
+  // Sections remember their state; defaultCollapsed sections store "open" instead of "collapsed"
+  function csWrap(id, title, body, defaultCollapsed = false) {
+    const c = defaultCollapsed ? !collapsedSecs.has(`${id}:open`) : collapsedSecs.has(id);
+    return `<section class="cs${c ? ' collapsed' : ''}" data-sec="${id}"${defaultCollapsed ? ' data-default-collapsed="1"' : ''}>
       <h5 class="sec cs-head" tabindex="0" role="button" aria-expanded="${!c}"><span class="chev" aria-hidden="true"></span>${title}</h5>
       <div class="cs-body"><div class="cs-inner">${body}</div></div></section>`;
   }
@@ -1041,7 +1056,8 @@
     const nowCollapsed = !sec.classList.contains('collapsed');
     sec.classList.toggle('collapsed', nowCollapsed);
     head.setAttribute('aria-expanded', !nowCollapsed);
-    if (nowCollapsed) collapsedSecs.add(id); else collapsedSecs.delete(id);
+    if (sec.dataset.defaultCollapsed) { if (nowCollapsed) collapsedSecs.delete(`${id}:open`); else collapsedSecs.add(`${id}:open`); }
+    else if (nowCollapsed) collapsedSecs.add(id); else collapsedSecs.delete(id);
     saveSet('astrosite.collapsed', collapsedSecs);
   }
   $('#tonight').addEventListener('click', (e) => { const h = e.target.closest('.cs-head'); if (h) toggleSection(h); });
@@ -1068,7 +1084,12 @@
     if (state.lat == null) { box.innerHTML = '<p class="muted" style="padding:12px 0">Pick a location first.</p>'; return; }
     if (typeof SunCalc === 'undefined') { box.innerHTML = '<p class="muted">Ephemeris library failed to load.</p>'; return; }
     const fc = state.fc;
-    if (!fc) { box.innerHTML = '<p class="muted" style="padding:12px 0">Loading the 14-day forecast…</p>'; return; }
+    if (!fc) {
+      box.innerHTML = state.fcError
+        ? `<p class="fc-note" style="margin:12px 0">Forecast unavailable: ${esc(state.fcError)}${OM.limited() ? ` — retrying after ${esc(new Date(OM.cooldownUntil()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))}` : ''}.</p>`
+        : '<p class="muted" style="padding:12px 0">Loading the 14-day forecast…</p>';
+      return;
+    }
 
     const hours = fc.hours;
     if (state.pendingTime != null) {
@@ -1189,14 +1210,13 @@
       ${csWrap('grid', `Forecast · ${FC_DAYS} days`, gridHtml)}
       <div id="fcDetail"></div>
       <div id="fcNight"></div>
-      <details class="fc-about">
-        <summary>About these forecasts</summary>
+      ${csWrap('about', 'About these forecasts', `<div class="fc-about">
         <p><b>Cloud cover</b> (total and low / mid / high layers), <b>visibility</b>, <b>wind</b>, <b>temperature</b>, <b>dew point</b> and <b>humidity</b> come straight from the Open-Meteo best-match weather models (14 days). Long-range hours come from coarser global models, so treat days 8–14 as a trend.</p>
         <p><b>Transparency</b> follows Astrospheric's scale: index 0–5 excellent, 6–9 above average, 10–13 average, 14–23 below average, 24–27 poor, above 27 cloudy. It's estimated here from precipitable water vapour, CAMS aerosol optical depth (smoke, dust, haze), high-cloud fraction and surface pressure (elevation).</p>
         <p><b>Seeing</b> is an estimate in arcseconds from jet-stream speed (300 / 200 hPa), vertical wind shear between 850, 500 and 300 hPa, and surface gusts. Ratings: excellent &lt;1.4″, above average &lt;1.9″, average &lt;2.6″, below average &lt;3.4″, poor beyond that. Values are shown even under cloud; the tooltip notes when the sky is cloudy (≥ ${SM.CLOUDY}%).</p>
         <p><b>Mist / fog</b> uses forecast visibility: under 1 km is fog, 1–5 km is mist. An orange mark means radiation fog or heavy dew is likely (temperature within 2 °C of the dew point; amber within 4 °C).</p>
         <p><b>Colours</b> are generated per value: each row converts its value to a 0–1 quality score with a fixed formula, and that score sets the lightness of a single blue (darker = better). <b>Solid red</b> marks an hour whose value is missing or relies on an estimated input, for example typical aerosol levels beyond the aerosol forecast range. Hover over any cell for its exact value; click a row label to open its data source.</p>
-      </details>
+      </div>`, true)}
       ${csWrap('links', 'Open this site in', `<div class="links">
         <a href="https://clearoutside.com/forecast/${state.lat.toFixed(2)}/${state.lon.toFixed(2)}" target="_blank" rel="noopener">Clear Outside</a>
         <a href="https://www.astrospheric.com/" target="_blank" rel="noopener">Astrospheric</a>
@@ -1227,6 +1247,7 @@
       saveSet('astrosite.fcHidden', set);
       $$(`tr[data-row="${cb.dataset.row}"]`, box).forEach((tr) => tr.classList.toggle('off', !cb.checked));
       placeMarkers(state.fcSel);
+      syncLayerOptions();
     });
     $('#fcVals', box).addEventListener('change', (e) => {
       state.showVals = e.target.checked;
@@ -1418,21 +1439,6 @@
     star.textContent = on ? '★' : '☆';
     star.setAttribute('aria-pressed', on);
     star.title = on ? 'Remove from saved locations' : 'Save this location';
-    $('#favCount').textContent = favs.length ? favs.length : '';
-  }
-
-  function renderFavs() {
-    const ul = $('#favsList');
-    if (!favs.length) {
-      ul.innerHTML = '<li class="empty">No saved locations yet. Pick a site and press ☆ next to its name.</li>';
-      return;
-    }
-    ul.innerHTML = favs.map((f, i) => `<li data-i="${i}"${state.lat != null && sameSpot(f, state) ? ' class="cur"' : ''}>
-        <button class="go" data-i="${i}"><span class="fn">${esc(f.name || 'Unnamed site')}</span>
-          <span class="fs">${(+f.lat).toFixed(5)}, ${(+f.lon).toFixed(5)}${f.elev != null ? ` · ${Math.round(f.elev)} m` : ''}${f.bortle ? ` · Bortle ~${esc(f.bortle)}` : ''}</span></button>
-        <button class="ren" data-ren="${i}" title="Rename" aria-label="Rename ${esc(f.name || 'site')}">✎</button>
-        <button class="rm" data-rm="${i}" title="Remove" aria-label="Remove ${esc(f.name || 'site')}">×</button>
-      </li>`).join('');
   }
 
   $('#favToggle').addEventListener('click', () => {
@@ -1446,68 +1452,10 @@
       });
       toast(`Saved “${state.name || 'Unnamed site'}”`);
     }
-    saveFavs(); updateFavStar(); renderFavs();
+    saveFavs(); updateFavStar();
+    if (!$('#tab-home').hidden) renderHome();
   });
 
-  const favsBtn = $('#favsBtn'), favsPop = $('#favsPop');
-  favsBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    const open = favsPop.hidden;
-    favsPop.hidden = !open;
-    favsBtn.setAttribute('aria-expanded', open);
-    if (open) renderFavs();
-  });
-  document.addEventListener('click', (e) => { if (!favsPop.hidden && !e.target.closest('.favs-wrap')) { favsPop.hidden = true; favsBtn.setAttribute('aria-expanded', false); } });
-  function startRename(i) {
-    const li = $(`#favsList li[data-i="${i}"]`);
-    if (!li) return;
-    const f = favs[i];
-    li.classList.add('editing');
-    li.innerHTML = `<input class="ren-input" type="text" maxlength="120" value="${esc(f.name || '')}" aria-label="New name">
-      <button class="ren-ok" title="Save name" aria-label="Save name">✓</button>`;
-    const inp = $('.ren-input', li);
-    inp.focus(); inp.select();
-    let done = false;
-    const commit = (save) => {
-      if (done) return;
-      done = true;
-      const name = inp.value.trim();
-      if (save && name && name !== f.name) {
-        f.name = name;
-        saveFavs();
-        if (state.lat != null && sameSpot(f, state)) { state.name = name; renderHead(); renderCoords(); updateHash(); }
-        toast(`Renamed to “${name}”`);
-      }
-      renderFavs();
-    };
-    inp.addEventListener('keydown', (ev) => {
-      if (ev.key === 'Enter') { ev.preventDefault(); commit(true); }
-      if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); commit(false); }
-    });
-    inp.addEventListener('blur', () => setTimeout(() => commit(true), 0));
-    $('.ren-ok', li).addEventListener('mousedown', (ev) => { ev.preventDefault(); commit(true); });
-  }
-
-  $('#favsList').addEventListener('click', (e) => {
-    const ren = e.target.closest('[data-ren]');
-    if (ren) { e.stopPropagation(); startRename(+ren.dataset.ren); return; }
-    if (e.target.closest('.ren-input, .ren-ok')) return;
-    const rm = e.target.closest('[data-rm]');
-    if (rm) {
-      const f = favs[+rm.dataset.rm];
-      favs.splice(+rm.dataset.rm, 1); saveFavs(); renderFavs(); updateFavStar();
-      toast(`Removed “${f.name || 'site'}”`);
-      return;
-    }
-    const go = e.target.closest('.go');
-    if (!go) return;
-    const f = favs[+go.dataset.i];
-    favsPop.hidden = true;
-    setLocation(f.lat, f.lon, {
-      name: f.name, zoom: 12,
-      elev: /GPS/.test(f.elevSource || '') ? f.elev : null, elevSource: f.elevSource,
-    });
-  });
   $('#favDownload').addEventListener('click', () => {
     if (!favs.length) { toast('Nothing to download yet'); return; }
     const data = { app: 'Astro Planner', format: 1, exported: new Date().toISOString(), locations: favs };
@@ -1538,7 +1486,8 @@
         if (favs.some((x) => sameSpot(x, item))) { skipped++; return; }
         favs.push(item); added++;
       });
-      saveFavs(); renderFavs(); updateFavStar();
+      saveFavs(); updateFavStar();
+      if (!$('#tab-home').hidden) renderHome();
       toast(`Imported ${added} location${added === 1 ? '' : 's'}${skipped ? ` · ${skipped} skipped (duplicates or invalid)` : ''}`);
     } catch (err) {
       toast(`Couldn't import: ${err.message}`);
@@ -1573,10 +1522,12 @@
     const lats = favs.map((f) => (+f.lat).toFixed(4)).join(','), lons = favs.map((f) => (+f.lon).toFixed(4)).join(',');
     const q = `latitude=${lats}&longitude=${lons}&timezone=GMT`;
     homeCache.pending = (async () => {
-      const [fc, aq] = await Promise.all([
-        fetch(`${OPEN_METEO}/forecast?${q}&forecast_days=${FC_DAYS}&wind_speed_unit=ms&hourly=${HOME_VARS.join(',')}`).then((r) => (r.ok ? r.json() : Promise.reject(new Error(`forecast ${r.status}`)))),
-        fetch(`${AIR_QUALITY}?${q}&forecast_days=7&hourly=aerosol_optical_depth`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+      const [fcR, aqR] = await Promise.all([
+        OM.cached(`home.${key}`, 3600000, () => OM.request('forecast', `${q}&forecast_days=${FC_DAYS}&wind_speed_unit=ms&hourly=${HOME_VARS.join(',')}`, { locations: favs.length, vars: HOME_VARS.length, days: FC_DAYS })),
+        OM.cached(`homeaq.${key}`, 3600000, () => OM.request('aq', `${q}&forecast_days=7&hourly=aerosol_optical_depth`, { locations: favs.length, vars: 1, days: 7 })).catch(() => ({ data: null })),
       ]);
+      const fc = fcR.data, aq = aqR.data;
+      homeCache.stale = !!fcR.stale;
       const fcs = Array.isArray(fc) ? fc : [fc];
       const aqs = aq ? (Array.isArray(aq) ? aq : [aq]) : [];
       const now = Date.now() - 3600000;
@@ -1686,7 +1637,10 @@
       return;
     }
     list.innerHTML = favs.map((f, i) => `<div class="hl-row" data-i="${i}">
-        <button class="hl-name" data-go="${i}" title="Open ${esc(f.name || 'site')}"><span>${esc(f.name || 'Unnamed site')}</span><small>${f.bortle ? `Bortle ~${esc(f.bortle)}` : `${(+f.lat).toFixed(2)}, ${(+f.lon).toFixed(2)}`}</small></button>
+        <div class="hl-namebox">
+          <button class="hl-name" data-go="${i}" title="Open ${esc(f.name || 'site')}"><span>${esc(f.name || 'Unnamed site')}</span><small>${f.bortle ? `Bortle ~${esc(f.bortle)}` : `${(+f.lat).toFixed(2)}, ${(+f.lon).toFixed(2)}`}</small></button>
+          <span class="hl-tools"><button class="hl-ren" data-ren="${i}" title="Rename" aria-label="Rename ${esc(f.name || 'site')}">✎</button><button class="hl-rm" data-rm="${i}" title="Remove" aria-label="Remove ${esc(f.name || 'site')}">×</button></span>
+        </div>
         <canvas class="hl-strip" data-i="${i}" data-kind="h24"></canvas>
         <canvas class="hl-strip" data-i="${i}" data-kind="d14"></canvas>
       </div>`).join('');
@@ -1694,7 +1648,7 @@
     let data;
     try { data = await loadHomeData(); } catch (e) { status.textContent = `Couldn't load forecasts (${e.message})`; return; }
     if (!data || !$('#homeList .hl-strip')) return;
-    status.textContent = '';
+    status.textContent = homeCache.stale ? 'Showing cached forecasts (service limit reached)' : '';
     const now = Date.now();
     const h0 = Math.floor(now / 3600000) * 3600000, h1 = h0 + 24 * 3600000;
     const series = data.map((d) => homeSeries(d.hours));
@@ -1767,7 +1721,39 @@
     tip.style.transform = `translate(${x}px, ${y}px)`;
   });
   $('#homeList').addEventListener('mouseleave', () => { const t = $('#fcTip'); if (t) t.hidden = true; });
+  function homeRename(i) {
+    const box = $(`#homeList .hl-row[data-i="${i}"] .hl-namebox`);
+    if (!box) return;
+    const f = favs[i];
+    box.innerHTML = `<input class="ren-input" type="text" maxlength="120" value="${esc(f.name || '')}" aria-label="New name">`;
+    const inp = $('.ren-input', box);
+    inp.focus(); inp.select();
+    let done = false;
+    const commit = (save) => {
+      if (done) return; done = true;
+      const name = inp.value.trim();
+      if (save && name && name !== f.name) {
+        f.name = name; saveFavs();
+        if (state.lat != null && sameSpot(f, state)) { state.name = name; renderHead(); renderCoords(); updateHash(); }
+        toast(`Renamed to “${name}”`);
+      }
+      renderHome();
+    };
+    inp.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); commit(true); } if (ev.key === 'Escape') { ev.preventDefault(); commit(false); } });
+    inp.addEventListener('blur', () => commit(true));
+  }
   $('#homeList').addEventListener('click', (e) => {
+    if (e.target.closest('.ren-input')) return;
+    const ren = e.target.closest('[data-ren]');
+    if (ren) { homeRename(+ren.dataset.ren); return; }
+    const rm = e.target.closest('[data-rm]');
+    if (rm) {
+      if (!rm.dataset.armed) { rm.dataset.armed = '1'; rm.textContent = 'Remove?'; rm.classList.add('armed'); setTimeout(() => { if (rm.isConnected) { delete rm.dataset.armed; rm.textContent = '×'; rm.classList.remove('armed'); } }, 3000); return; }
+      const f = favs.splice(+rm.dataset.rm, 1)[0];
+      saveFavs(); updateFavStar(); renderHome();
+      toast(`Removed “${f.name || 'site'}”`);
+      return;
+    }
     const go = e.target.closest('[data-go]');
     const cv = e.target.closest('.hl-strip');
     const i = go ? +go.dataset.go : cv ? +cv.dataset.i : -1;
@@ -1785,6 +1771,12 @@
     homeResizeTimer = setTimeout(() => { if (!$('#tab-home').hidden && homeCache.data) renderHome(); }, 200);
   });
 
+  OM.onLimit((until) => {
+    toast(`Open-Meteo free limit reached — using cached data until ${new Date(until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`);
+    renderCaption();
+    if (!$('#tab-home').hidden) refreshSettings();
+  });
+
   /* ---------------- Settings backup: everything the browser remembers ---------------- */
   const CFG_PREFIX = 'astrosite.';
   function refreshSettings() {
@@ -1797,6 +1789,9 @@
     $('#smoothMapChk').checked = smoothMapPref;
     $('#smoothDataChk').checked = smoothDataPref;
     $('#appVersion').textContent = APP_VERSION;
+    const u = OM.usage();
+    $('#omUsage').textContent = `≈ ${u.hour.toLocaleString()} calls this hour · ${u.day.toLocaleString()} today (this browser)${OM.limited() ? ` · limit reached, resuming ${new Date(OM.cooldownUntil()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}`;
+    const ki = $('#omKey'); if (document.activeElement !== ki) ki.value = OM.apiKey();
   }
   $$('#unitsSeg button').forEach((b) => b.addEventListener('click', () => setUnits(b.dataset.units)));
   $$('#qualitySeg button').forEach((b) => b.addEventListener('click', () => {
@@ -1826,6 +1821,11 @@
     applySmoothing();
   });
   $('#resetWidth').addEventListener('click', () => { setPanelWidth(PANEL_DEFAULT, true); toast('Sidebar width reset'); });
+  $('#omKey').addEventListener('change', (e) => {
+    OM.setApiKey(e.target.value);
+    toast(e.target.value.trim() ? 'Open-Meteo API key saved — using the customer endpoints' : 'Open-Meteo API key removed');
+    refreshSettings();
+  });
   $('#cfgExport').addEventListener('click', () => {
     const settings = {};
     Object.keys(localStorage).filter((k) => k.startsWith(CFG_PREFIX)).sort().forEach((k) => { settings[k.slice(CFG_PREFIX.length)] = localStorage.getItem(k); });
@@ -2069,22 +2069,24 @@
         <td><input type="range" min="0" max="100" value="${Math.round(opOf(k) * 100)}" data-op="${k}" aria-label="${esc(label)} opacity" title="Opacity"></td></tr>`;
       div.innerHTML = `
         <button type="button" class="lyr-title" aria-expanded="${!collapsed}">Layers <span class="chev" aria-hidden="true"></span></button>
-        <div class="lyr-body"${collapsed ? ' hidden' : ''}>
+        <div class="lyr-body${collapsed ? ' closed' : ''}"><div class="lyr-inner">
+          <div class="base-row"><span>Base map</span><div class="seg base-seg" role="group" aria-label="Base map">${Object.keys(baseLayers).map((n) => `<button type="button" data-base="${n}" class="${n === currentBase ? 'on' : ''}">${n === 'Satellite' ? 'Sat' : n}</button>`).join('')}</div></div>
           <table class="lyr-table"><tbody>
             ${row('data-lyr', 'lp', 'Light pollution', 'Light Pollution Atlas 2025 (D. Lorenz)').replace('<tr ', '<tr class="lyr-lp" ')}
             <tr class="lyr-head"><td colspan="2">Forecast <span class="muted">· selected hour</span></td></tr>
             ${WX_KEYS.map((k) => row('data-wx', k, WX_NAMES[k], k === 'cloud' ? 'At the current hour this shows live satellite infrared imagery' : '')).join('')}
             <tr class="lyr-foot"><td colspan="2"><div class="lyr-foot-in"><label class="chk"><input type="checkbox" class="wx-vals" ${wx.vals ? 'checked' : ''}> Values on top layer</label><a href="${window.LightPollution.colorsUrl}" target="_blank" rel="noopener" title="Light-pollution colour key">LP key</a></div></td></tr>
           </tbody></table>
-        </div>`;
+        </div></div>`;
       L.DomEvent.disableClickPropagation(div);
       L.DomEvent.disableScrollPropagation(div);
       const title = div.querySelector('.lyr-title'), body = div.querySelector('.lyr-body');
       title.addEventListener('click', () => {
-        const open = body.hidden;
-        body.hidden = !open; title.setAttribute('aria-expanded', open);
+        const open = body.classList.contains('closed');
+        body.classList.toggle('closed', !open); title.setAttribute('aria-expanded', open);
         try { localStorage.setItem('astrosite.layersCollapsed', open ? '0' : '1'); } catch (e) { /* ignore */ }
       });
+      div.querySelectorAll('[data-base]').forEach((b) => b.addEventListener('click', () => setBase(b.dataset.base)));
       const lpBtn = div.querySelector('[data-lyr="lp"]');
       const setLp = (on) => {
         lpSetOn(on);
@@ -2126,10 +2128,27 @@
       } catch (e) { /* ignore */ }
       lpSetOpacity(opOf('lp'));
       try { if (localStorage.getItem('astrosite.lpmap') === '1') setTimeout(() => setLp(true), 0); } catch (e) { /* ignore */ }
+      syncLayerOptions();
       if (wxActive()) setTimeout(() => scheduleWx(0), 0);
       return div;
     },
   });
+  // Rows switched off in the forecast table are removed from the map overlays (and turned off if showing)
+  function syncLayerOptions() {
+    const hidden = loadSet('astrosite.fcHidden');
+    document.querySelectorAll('.lyr-table tr[data-row]').forEach((tr) => {
+      const k = tr.dataset.row;
+      if (!WX_KEYS.includes(k)) return;
+      tr.hidden = hidden.has(k);
+      if (hidden.has(k) && wx.keys.includes(k)) {
+        wx.keys = wx.keys.filter((x) => x !== k);
+        removeWxLayer(k);
+        const b = tr.querySelector('[data-wx]'); if (b) b.setAttribute('aria-pressed', 'false');
+        saveWxKeys();
+        scheduleWx(0);
+      }
+    });
+  }
   map.addControl(new LayersControl());
 
   // Caption with time stepping and legend
@@ -2159,7 +2178,10 @@
 
   function viewCovered() {
     if (!wx.grid) return false;
-    return wx.grid.zoom === map.getZoom() && wx.grid.bounds.contains(map.getBounds());
+    const sp = mapQuality === 'high' ? 110 : 150;
+    if (wx.grid.zoom !== map.getZoom() || wx.grid.sp !== sp || !wx.grid.bounds.contains(map.getBounds())) return false;
+    // data for all active layers must have been requested for this grid
+    return wx.grid.keysSig === wx.keys.slice().sort().join(',');
   }
 
   async function updateWx() {
@@ -2173,7 +2195,9 @@
     try {
       const grid = await fetchWxGrid(t);
       if (id !== wx.req) return;
+      grid.keysSig = wx.keys.slice().sort().join(',');
       wx.grid = grid;
+      if (grid.error && !grid.error.limit) toast(`Some forecast data unavailable: ${grid.error.message}`);
     } catch (err) {
       if (id === wx.req) { toast(`Forecast overlay unavailable: ${err.message}`); wx.grid = null; }
     } finally {
@@ -2181,54 +2205,118 @@
     }
   }
 
+  // Variables each map layer needs (only these are requested)
+  const WX_VARS = {
+    cloud: ['cloud_cover'], cloudLow: ['cloud_cover_low'], cloudMid: ['cloud_cover_mid'], cloudHigh: ['cloud_cover_high'],
+    trans: ['cloud_cover', 'cloud_cover_high', 'total_column_integrated_water_vapour', 'surface_pressure', 'dew_point_2m'],
+    see: ['cloud_cover', 'wind_gusts_10m', 'wind_speed_850hPa', 'wind_direction_850hPa', 'wind_speed_500hPa', 'wind_direction_500hPa', 'wind_speed_300hPa', 'wind_direction_300hPa', 'wind_speed_200hPa'],
+    fog: ['visibility', 'temperature_2m', 'dew_point_2m', 'wind_speed_10m'],
+    wind: ['wind_speed_10m'], gust: ['wind_gusts_10m'], temp: ['temperature_2m'], dew: ['dew_point_2m', 'temperature_2m'], rh: ['relative_humidity_2m'],
+  };
+  const PT_TTL = 2 * 3600000;          // model output changes every few hours
+  const WIN_HOURS = 72; // fetch 3-day windows so stepping through hours rarely refetches
+  const ptMem = new Map();
+  function ptEntry(key) {
+    if (ptMem.has(key)) return ptMem.get(key);
+    const c = OM.cacheGet(`pt.${key}`, PT_TTL);
+    const e = c && c.fresh ? c.data : null;
+    if (e) ptMem.set(key, e);
+    return e;
+  }
+  function ptSave(key, e) { e.at = Date.now(); ptMem.set(key, e); OM.cacheSet(`pt.${key}`, e); }
+
   async function fetchWxGrid(t) {
-    const size = map.getSize();
     const zoom = map.getZoom();
-    const hq = mapQuality === 'high';
-    const cols = Math.max(6, Math.min(hq ? 16 : 12, Math.round(size.x / (hq ? 55 : 80))));
-    const rows = Math.max(5, Math.min(hq ? 16 : 12, Math.round(size.y / (hq ? 55 : 80))));
+    const sp = mapQuality === 'high' ? 110 : 150; // lattice spacing (screen px) — fixed per zoom so panning reuses points
     const pb = map.getPixelBounds();
-    const padX = (pb.max.x - pb.min.x) * 0.12, padY = (pb.max.y - pb.min.y) * 0.12;
-    const minX = pb.min.x - padX, maxX = pb.max.x + padX, minY = pb.min.y - padY, maxY = pb.max.y + padY;
+    const c0 = Math.floor(pb.min.x / sp), c1 = Math.ceil(pb.max.x / sp), r0 = Math.floor(pb.min.y / sp), r1 = Math.ceil(pb.max.y / sp);
+    const cols = c1 - c0 + 1, rows = r1 - r0 + 1;
     const pts = [];
-    for (let r = 0; r < rows; r++) {
-      for (let c = 0; c < cols; c++) {
-        const ll = map.unproject([minX + ((c + 0.5) / cols) * (maxX - minX), minY + ((r + 0.5) / rows) * (maxY - minY)], zoom);
-        pts.push({ lat: Math.max(-85, Math.min(85, ll.lat)), lon: A.mod(ll.lng + 180, 360) - 180, r, c });
+    for (let r = r0; r <= r1; r++) {
+      for (let c = c0; c <= c1; c++) {
+        const ll = map.unproject([c * sp, r * sp], zoom);
+        const lat = Math.max(-85, Math.min(85, ll.lat)), lon = A.mod(ll.lng + 180, 360) - 180;
+        pts.push({ lat, lon, r: r - r0, c: c - c0, key: `${lat.toFixed(3)},${lon.toFixed(3)}` });
       }
     }
-    const nw = map.unproject([minX, minY], zoom), se = map.unproject([maxX, maxY], zoom);
+    const nw = map.unproject([(c0 - 0.5) * sp, (r0 - 0.5) * sp], zoom), se = map.unproject([(c1 + 0.5) * sp, (r1 + 0.5) * sp], zoom);
     const bounds = L.latLngBounds(se, nw);
-    const start = t - 6 * 3600000, end = t + 24 * 3600000;
-    const q = `latitude=${pts.map((p) => p.lat.toFixed(3)).join(',')}&longitude=${pts.map((p) => p.lon.toFixed(3)).join(',')}&timezone=GMT&start_hour=${isoHour(start)}&end_hour=${isoHour(end)}`;
-    const [fc, aq] = await Promise.all([
-      fetch(`${OPEN_METEO}/forecast?${q}&wind_speed_unit=ms&hourly=${FC_VARS.join(',')}`).then((r) => (r.ok ? r.json() : r.json().then((j) => Promise.reject(new Error(j.reason || r.status))))),
-      fetch(`${AIR_QUALITY}?${q}&hourly=aerosol_optical_depth`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
-    ]);
-    const fcs = Array.isArray(fc) ? fc : [fc];
-    const aqs = aq ? (Array.isArray(aq) ? aq : [aq]) : [];
-    const times = (fcs[0] && fcs[0].hourly ? fcs[0].hourly.time : []).map((s) => Date.parse(`${s}:00Z`));
-    pts.forEach((p, k) => {
-      p.H = fcs[k] ? fcs[k].hourly : null;
-      const AQ = aqs[k] && aqs[k].hourly;
-      p.aod = AQ && AQ.time && AQ.aerosol_optical_depth ? new Map(AQ.time.map((s, i) => [Date.parse(`${s}:00Z`), AQ.aerosol_optical_depth[i]])) : new Map();
+    // Day-aligned windows (previous day → next day, UTC) so stepping hours, panning and reloads reuse cached data
+    const DAY = 86400000;
+    const start = Math.floor(t / DAY) * DAY - DAY, end = start + 3 * DAY - 3600000;
+    const times = []; for (let x = start; x <= end; x += 3600000) times.push(x);
+    const need = [...new Set(wx.keys.flatMap((k) => WX_VARS[k] || []))];
+    const needAq = wx.keys.includes('trans');
+
+    // Which points are missing which data?
+    const covers = (e) => e && e.start <= start && e.end >= end;
+    const groups = new Map();
+    const aqMissing = [];
+    pts.forEach((p) => {
+      const e = ptEntry(p.key);
+      const missing = covers(e) ? need.filter((v) => !(e.vars && e.vars[v])) : need;
+      if (missing.length) {
+        const sig = missing.join(',');
+        if (!groups.has(sig)) groups.set(sig, []);
+        groups.get(sig).push(p);
+      }
+      if (needAq && !(covers(e) && e.aod)) aqMissing.push(p);
     });
-    return { pts, cols, rows, bounds, zoom, times };
+    const unique = (list) => [...new Map(list.map((p) => [p.key, p])).values()];
+    const chunks = (list, n) => { const out = []; for (let i = 0; i < list.length; i += n) out.push(list.slice(i, i + n)); return out; };
+    const win = `timezone=GMT&start_hour=${isoHour(start)}&end_hour=${isoHour(end)}`;
+    let error = null;
+    const jobs = [];
+    groups.forEach((list, sig) => chunks(unique(list), 100).forEach((ch) => jobs.push(async () => {
+      const vars = sig.split(',');
+      const q = `latitude=${ch.map((p) => p.lat.toFixed(3)).join(',')}&longitude=${ch.map((p) => p.lon.toFixed(3)).join(',')}&${win}&wind_speed_unit=ms&hourly=${vars.join(',')}`;
+      const res = await OM.request('forecast', q, { locations: ch.length, vars: vars.length, days: WIN_HOURS / 24 });
+      const arr = Array.isArray(res) ? res : [res];
+      ch.forEach((p, i) => {
+        const H = arr[i] && arr[i].hourly;
+        if (!H) return;
+        const t0 = Date.parse(`${H.time[0]}:00Z`), t1 = Date.parse(`${H.time[H.time.length - 1]}:00Z`);
+        let e = ptEntry(p.key);
+        if (!covers(e)) e = { start: t0, end: t1, vars: {}, aod: null };
+        vars.forEach((v) => { if (H[v]) e.vars[v] = H[v]; });
+        ptSave(p.key, e);
+      });
+    })));
+    chunks(unique(aqMissing), 100).forEach((ch) => jobs.push(async () => {
+      const q = `latitude=${ch.map((p) => p.lat.toFixed(3)).join(',')}&longitude=${ch.map((p) => p.lon.toFixed(3)).join(',')}&${win}&hourly=aerosol_optical_depth`;
+      const res = await OM.request('aq', q, { locations: ch.length, vars: 1, days: WIN_HOURS / 24 });
+      const arr = Array.isArray(res) ? res : [res];
+      ch.forEach((p, i) => {
+        const H = arr[i] && arr[i].hourly;
+        if (!H) return;
+        let e = ptEntry(p.key);
+        if (!covers(e)) e = { start, end, vars: {}, aod: null };
+        e.aod = { start: Date.parse(`${H.time[0]}:00Z`), v: H.aerosol_optical_depth };
+        ptSave(p.key, e);
+      });
+    }));
+    for (const job of jobs) {
+      try { await job(); } catch (err) { error = err; if (err.limit) break; }
+    }
+    return { pts, cols, rows, bounds, zoom, times, sp, c0, r0, error };
   }
 
   function wxHour(p, ti) {
-    const H = p.H;
-    if (!H) return null;
-    const g = (k) => (H[k] ? H[k][ti] : null);
+    const e = ptEntry(p.key);
+    if (!e) return null;
     const t = wx.grid.times[ti];
+    const i = Math.round((t - e.start) / 3600000);
+    const V = e.vars || {};
+    const g = (k) => (V[k] && i >= 0 && i < V[k].length ? V[k][i] : null);
+    const ai = e.aod ? Math.round((t - e.aod.start) / 3600000) : -1;
     const h = {
       t: new Date(t), cloud: g('cloud_cover'), cloudLow: g('cloud_cover_low'), cloudMid: g('cloud_cover_mid'), cloudHigh: g('cloud_cover_high'),
       vis: g('visibility'), temp: g('temperature_2m'), dew: g('dew_point_2m'), rh: g('relative_humidity_2m'),
-      wind: g('wind_speed_10m'), gust: g('wind_gusts_10m'), wdir: g('wind_direction_10m'), precip: g('precipitation_probability'),
+      wind: g('wind_speed_10m'), gust: g('wind_gusts_10m'), wdir: g('wind_direction_10m'), precip: null,
       pressure: g('surface_pressure'), tcwv: g('total_column_integrated_water_vapour'),
       ws850: g('wind_speed_850hPa'), wd850: g('wind_direction_850hPa'), ws500: g('wind_speed_500hPa'), wd500: g('wind_direction_500hPa'),
       ws300: g('wind_speed_300hPa'), wd300: g('wind_direction_300hPa'), ws200: g('wind_speed_200hPa'),
-      aod: p.aod.has(t) ? p.aod.get(t) : null,
+      aod: e.aod && ai >= 0 && ai < e.aod.v.length ? e.aod.v[ai] : null,
     };
     h.see = SM.seeing(h); h.trans = SM.transparency(h); h.fog = SM.fog(h); h.dewRisk = SM.dewRisk(h.fog.spread);
     return h;
@@ -2253,7 +2341,7 @@
     const names = wx.keys.map((k) => (k === 'cloud' && isNowHour(t) ? 'Cloud cover (live satellite)' : WX_NAMES[k]));
     const bar = [0, 0.25, 0.5, 0.75, 1].map((q) => `<i style="background:${shade(q, false).bg}"></i>`).join('');
     wxCap.innerHTML = `<button data-step="-1" title="Previous hour" aria-label="Previous hour">◀</button>
-      <span><b>${esc(names.join(' + '))}</b> · ${esc(state.tz ? `${fmtDay(new Date(t))} ${fmtTime(new Date(t))}` : localTime(new Date(t)))}${wx.loading ? ' · loading…' : ''}</span>
+      <span><b>${esc(names.join(' + '))}</b> · ${esc(state.tz ? `${fmtDay(new Date(t))} ${fmtTime(new Date(t))}` : localTime(new Date(t)))}${wx.loading ? ' · loading…' : ''}${OM.limited() ? ` · <span class="lim-note" title="Free Open-Meteo hourly limit reached; showing cached data">limit — cached until ${esc(new Date(OM.cooldownUntil()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))}</span>` : ''}</span>
       <button data-step="1" title="Next hour" aria-label="Next hour">▶</button>
       <span class="scale" title="worse → better">${bar}</span>`;
     wxCap.hidden = false;

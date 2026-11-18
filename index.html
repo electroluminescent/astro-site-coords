@@ -10,50 +10,43 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/style.css?v=1.6.0">
+  <link rel="stylesheet" href="css/style.css?v=1.7.0">
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand">
-      <svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><defs><pattern id="cam-px" width="2" height="2" patternUnits="userSpaceOnUse"><rect x="0.5" y="0.5" width="1" height="1" class="c-dot"/></pattern></defs><circle class="c-body" cx="16" cy="16" r="14.5"/><circle class="c-hole" cx="7.9" cy="7.9" r="1.1"/><circle class="c-hole" cx="24.1" cy="7.9" r="1.1"/><circle class="c-hole" cx="7.9" cy="24.1" r="1.1"/><circle class="c-hole" cx="24.1" cy="24.1" r="1.1"/><circle class="c-bore" cx="16" cy="16" r="8"/><rect class="c-sensor" x="11" y="12.5" width="10" height="7" rx="0.6"/><rect x="11" y="12.5" width="10" height="7" fill="url(#cam-px)"/></svg>
-      <h1>Astro Planner</h1>
-    </div>
-    <form class="search" id="searchForm" autocomplete="off" role="search">
-      <input id="searchInput" type="search" placeholder="Place name, address, or coordinates — e.g. 43.589, -79.644 · 43°35′20″N 79°38′38″W · FN03eo" aria-label="Search place or coordinates">
-      <button type="submit" class="btn primary">Go</button>
-      <button type="button" class="btn icon" id="locateBtn" title="Use my current location" aria-label="Use my current location">
-        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/><circle cx="12" cy="12" r="8" fill="none"/></svg>
-      </button>
-      <ul class="results" id="searchResults" role="listbox" hidden></ul>
-    </form>
-    <div class="site-block" id="siteBlock">
-      <div class="name-row">
-        <button class="star" id="favToggle" aria-pressed="false" title="Save this location" hidden>☆</button>
-        <input id="siteName" type="text" value="" placeholder="Pick a location" aria-label="Site name">
-      </div>
-      <div class="site-meta">
-        <span class="site-sub" id="siteSub"></span>
-        <a class="sky-badge" id="skyBadge" target="_blank" rel="noopener" hidden></a>
-        <span class="elev-chip" title="Elevation"><span class="elev-lbl">Elev</span> <output id="elevInput" class="elev-val" aria-live="polite"></output> m <span class="elev-src" id="elevSrc"></span></span>
-      </div>
-    </div>
-    <div class="top-actions">
-      <div class="favs-wrap">
-        <button class="btn ghost" id="favsBtn" aria-haspopup="true" aria-expanded="false" title="Saved locations">★ Saved <span class="count" id="favCount"></span></button>
-        <div class="favs-pop" id="favsPop" hidden>
-          <div class="favs-head"><b>Saved locations</b></div>
-          <ul class="favs-list" id="favsList"></ul>
-        </div>
-      </div>
-    </div>
-  </header>
 
   <main class="layout">
+    <div class="main-col">
+    <header class="topbar">
+      <div class="brand">
+        <svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><defs><pattern id="cam-px" width="2" height="2" patternUnits="userSpaceOnUse"><rect x="0.5" y="0.5" width="1" height="1" class="c-dot"/></pattern></defs><circle class="c-body" cx="16" cy="16" r="14.5"/><circle class="c-hole" cx="7.9" cy="7.9" r="1.1"/><circle class="c-hole" cx="24.1" cy="7.9" r="1.1"/><circle class="c-hole" cx="7.9" cy="24.1" r="1.1"/><circle class="c-hole" cx="24.1" cy="24.1" r="1.1"/><circle class="c-bore" cx="16" cy="16" r="8"/><rect class="c-sensor" x="11" y="12.5" width="10" height="7" rx="0.6"/><rect x="11" y="12.5" width="10" height="7" fill="url(#cam-px)"/></svg>
+        <h1>Astro Planner</h1>
+      </div>
+      <form class="search" id="searchForm" autocomplete="off" role="search">
+        <input id="searchInput" type="search" placeholder="Place name, address, or coordinates — e.g. 43.589, -79.644 · 43°35′20″N 79°38′38″W · FN03eo" aria-label="Search place or coordinates">
+        <button type="submit" class="btn primary">Go</button>
+        <button type="button" class="btn icon" id="locateBtn" title="Use my current location" aria-label="Use my current location">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/><circle cx="12" cy="12" r="8" fill="none"/></svg>
+        </button>
+        <ul class="results" id="searchResults" role="listbox" hidden></ul>
+      </form>
+      <div class="site-block" id="siteBlock">
+        <div class="name-row">
+          <button class="star" id="favToggle" aria-pressed="false" title="Save this location" hidden>☆</button>
+          <input id="siteName" type="text" value="" placeholder="Pick a location" aria-label="Site name">
+        </div>
+        <div class="site-meta">
+          <span class="site-sub" id="siteSub"></span>
+          <a class="sky-badge" id="skyBadge" target="_blank" rel="noopener" hidden></a>
+          <span class="elev-chip" title="Elevation"><span class="elev-lbl">Elev</span> <output id="elevInput" class="elev-val" aria-live="polite"></output> m <span class="elev-src" id="elevSrc"></span></span>
+        </div>
+      </div>
+    </header>
     <section class="map-wrap">
       <div id="map" aria-label="Map"></div>
       <div class="map-hint" id="mapHint">Click the map or drag the marker to set the site</div>
       <div class="cursor-readout" id="cursorReadout"></div>
     </section>
+    </div>
 
     <aside class="panel" id="panel">
       <div class="resizer" id="resizer" role="separator" aria-orientation="vertical" aria-label="Resize sidebar (drag, or use arrow keys; double-click to reset)" tabindex="0"></div>
@@ -120,6 +113,12 @@
           <div class="set-row"><span>Sidebar width</span><button class="btn small" id="resetWidth">Reset to default</button></div>
         </section>
         <section class="set-group">
+          <h5 class="sec">Forecast data</h5>
+          <div class="set-row"><span>Open-Meteo usage<small class="muted" id="omUsage"></small></span></div>
+          <div class="set-row"><span>API key <small class="muted">Optional — paid Open-Meteo plans lift the free 5,000 calls/hour limit</small></span>
+            <input type="password" id="omKey" class="key-input" placeholder="none (free API)" autocomplete="off" spellcheck="false"></div>
+        </section>
+        <section class="set-group">
           <h5 class="sec">Saved locations backup</h5>
           <div class="set-row"><span id="favSummary" class="muted">None saved</span>
             <div class="set-btns">
@@ -164,10 +163,11 @@
 
   <script src="vendor/leaflet/leaflet.js"></script>
   <script src="vendor/suncalc/suncalc.js"></script>
-  <script src="js/color.js?v=1.6.0"></script>
-  <script src="js/astro.js?v=1.6.0"></script>
-  <script src="js/forecast-model.js?v=1.6.0"></script>
-  <script src="js/lightpollution.js?v=1.6.0"></script>
-  <script src="js/app.js?v=1.6.0"></script>
+  <script src="js/color.js?v=1.7.0"></script>
+  <script src="js/astro.js?v=1.7.0"></script>
+  <script src="js/openmeteo.js?v=1.7.0"></script>
+  <script src="js/forecast-model.js?v=1.7.0"></script>
+  <script src="js/lightpollution.js?v=1.7.0"></script>
+  <script src="js/app.js?v=1.7.0"></script>
 </body>
 </html>
