@@ -3,23 +3,20 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AstroSite — Observing-site coordinates for astrophotography</title>
+  <title>Astro Planner</title>
   <meta name="description" content="Find any place on a map and copy its latitude, longitude and elevation in every format N.I.N.A., ASTAP, PixInsight, Siril, Stellarium, KStars/INDI, ASCOM, LX200/OnStep and FITS headers expect.">
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='13' fill='none' stroke='%237fb3ff' stroke-width='2'/><path d='M16 3v26M3 16h26' stroke='%237fb3ff' stroke-width='1.5'/><circle cx='16' cy='16' r='3' fill='%23ffcc66'/></svg>">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 -16 64 64'><g fill='none' stroke='%237fb3ff' stroke-width='2.4' stroke-linejoin='round'><rect class='t-dew' x='1' y='7' width='11' height='18' rx='1.5'/><rect class='t-ota' x='11' y='9' width='21' height='14' rx='1'/><rect class='t-foc' x='32' y='12.5' width='3.5' height='7'/><rect class='t-rot' x='35.5' y='10.5' width='4' height='11' rx='1'/><rect class='t-oag' x='39.5' y='11.5' width='4.5' height='9'/><rect class='t-gstem' x='40.5' y='6' width='2.5' height='5.5'/><rect class='t-gcam' x='38.5' y='1.5' width='6.5' height='4.5' rx='1'/><rect fill='%237fb3ff' class='t-fw' x='44' y='3.5' width='5.5' height='25' rx='2.75'/><rect fill='%23ffcc66' stroke='%23ffcc66' class='t-cam' x='49.5' y='8' width='13' height='16' rx='2.5'/><circle stroke='%230b0f17' class='t-fan' cx='56' cy='16' r='3.5'/></g></svg>">
   <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/style.css?v=1.1.0">
+  <link rel="stylesheet" href="css/style.css?v=1.2.0">
 </head>
 <body>
   <header class="topbar">
     <div class="brand">
-      <svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="13"/><path d="M16 3v26M3 16h26"/><circle class="dot" cx="16" cy="16" r="3"/></svg>
-      <div>
-        <h1>AstroSite</h1>
-        <p>Observing-site coordinates for astrophotography software</p>
-      </div>
+      <svg class="logo" viewBox="0 0 64 32" aria-hidden="true"><rect class="t-dew" x="1" y="7" width="11" height="18" rx="1.5"/><rect class="t-ota" x="11" y="9" width="21" height="14" rx="1"/><rect class="t-foc" x="32" y="12.5" width="3.5" height="7"/><rect class="t-rot" x="35.5" y="10.5" width="4" height="11" rx="1"/><rect class="t-oag" x="39.5" y="11.5" width="4.5" height="9"/><rect class="t-gstem" x="40.5" y="6" width="2.5" height="5.5"/><rect class="t-gcam" x="38.5" y="1.5" width="6.5" height="4.5" rx="1"/><rect class="t-fw" x="44" y="3.5" width="5.5" height="25" rx="2.75"/><rect class="t-cam" x="49.5" y="8" width="13" height="16" rx="2.5"/><circle class="t-fan" cx="56" cy="16" r="3.5"/></svg>
+      <h1>Astro Planner</h1>
     </div>
     <form class="search" id="searchForm" autocomplete="off" role="search">
       <input id="searchInput" type="search" placeholder="Place name, address, or coordinates — e.g. 43.589, -79.644 · 43°35′20″N 79°38′38″W · FN03eo" aria-label="Search place or coordinates">
@@ -30,7 +27,41 @@
       <ul class="results" id="searchResults" role="listbox" hidden></ul>
     </form>
     <div class="top-actions">
-      <button class="btn ghost" id="nightBtn" title="Red night-vision mode" aria-pressed="false">Night mode</button>
+      <div class="favs-wrap">
+        <button class="btn ghost" id="favsBtn" aria-haspopup="true" aria-expanded="false" title="Saved locations">★ Saved <span class="count" id="favCount"></span></button>
+        <div class="favs-pop" id="favsPop" hidden>
+          <div class="favs-head">
+            <b>Saved locations</b>
+            <div class="favs-actions">
+              <button class="btn small" id="favDownload" title="Download your saved locations as a JSON file">Download</button>
+              <button class="btn small" id="favUpload" title="Restore saved locations from a downloaded file">Import</button>
+              <input type="file" id="favFile" accept=".json,application/json" hidden>
+            </div>
+          </div>
+          <ul class="favs-list" id="favsList"></ul>
+        </div>
+      </div>
+      <div class="cfg-wrap">
+        <button class="btn ghost icon" id="cfgBtn" aria-haspopup="true" aria-expanded="false" title="Back up or restore settings">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/></svg>
+        </button>
+        <div class="favs-pop cfg-pop" id="cfgPop" hidden>
+          <div class="favs-head"><b>Settings</b><span class="muted small" id="cfgCount"></span></div>
+          <div class="cfg-body">
+            <p class="muted small">Saved locations, pins, hidden rows and programs, units, view, colour scheme, sidebar width and map layers.</p>
+            <div class="cfg-btns">
+              <button class="btn small" id="cfgExport">Export config</button>
+              <button class="btn small" id="cfgImport">Import config</button>
+              <input type="file" id="cfgFile" accept=".json,application/json" hidden>
+            </div>
+            <button class="btn small danger" id="cfgReset">Reset all settings</button>
+          </div>
+        </div>
+      </div>
+      <div class="seg scheme" id="schemeSeg" role="group" aria-label="Colour scheme" title="Night renders everything in monochrome red to preserve dark adaptation">
+        <button data-scheme="default" class="on">Default</button>
+        <button data-scheme="night">Night</button>
+      </div>
     </div>
   </header>
 
@@ -42,19 +73,25 @@
     </section>
 
     <aside class="panel" id="panel">
+      <div class="resizer" id="resizer" role="separator" aria-orientation="vertical" aria-label="Resize sidebar (drag, or use arrow keys; double-click to reset)" tabindex="0"></div>
       <div class="site-head">
         <div class="site-title">
-          <input id="siteName" type="text" value="" placeholder="Site name" aria-label="Site name">
+          <div class="name-row">
+            <input id="siteName" type="text" value="" placeholder="Site name" aria-label="Site name">
+            <button class="star" id="favToggle" aria-pressed="false" title="Save this location" hidden>☆</button>
+          </div>
           <div class="site-sub" id="siteSub">Pick a location to begin</div>
+          <a class="sky-badge" id="skyBadge" target="_blank" rel="noopener" hidden></a>
         </div>
         <div class="elev-box">
-          <label for="elevInput">Elevation (m)</label>
-          <input id="elevInput" type="number" step="1" inputmode="decimal">
+          <span class="elev-lbl">Elevation (m)</span>
+          <output id="elevInput" class="elev-val" aria-live="polite"></output>
           <span class="elev-src" id="elevSrc"></span>
         </div>
       </div>
 
       <nav class="tabs" role="tablist">
+        <span class="tab-ink" aria-hidden="true"></span>
         <button role="tab" class="tab active" data-tab="coords" aria-selected="true">Coordinates</button>
         <button role="tab" class="tab" data-tab="tonight" aria-selected="false">Night forecast</button>
       </nav>
@@ -66,6 +103,7 @@
             <button data-view="type">By type</button>
           </div>
           <div class="toolbar-btns">
+            <button class="btn small" id="coordEdit" aria-pressed="false" title="Choose which programs or groups to show">Edit</button>
             <button class="btn small" id="copyTsv" title="Copy every distinct value as tab-separated text">Copy table</button>
             <button class="btn small" id="copyMd">Markdown</button>
             <button class="btn small" id="dlJson">JSON</button>
@@ -83,19 +121,25 @@
       <footer class="panel-foot">
         Map © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors ·
         Search by <a href="https://nominatim.org" target="_blank" rel="noopener">Nominatim</a> ·
-        Elevation &amp; time zone by <a href="https://open-meteo.com" target="_blank" rel="noopener">Open-Meteo</a> (Copernicus DEM) ·
+        Elevation, forecast &amp; aerosols by <a href="https://open-meteo.com" target="_blank" rel="noopener">Open-Meteo</a> ·
+        Light pollution: <a href="https://djlorenz.github.io/astronomy/lp/" target="_blank" rel="noopener">Lorenz atlas 2025</a> ·
         <a href="https://github.com/electroluminescent/astro-site-coords" target="_blank" rel="noopener">Source on GitHub</a>
       </footer>
     </aside>
   </main>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
-  <div class="night-filter" aria-hidden="true"></div>
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+    <filter id="mono-red" color-interpolation-filters="sRGB">
+      <feColorMatrix type="matrix" values="0.2126 0.7152 0.0722 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0"/>
+    </filter>
+  </svg>
 
   <script src="vendor/leaflet/leaflet.js"></script>
   <script src="vendor/suncalc/suncalc.js"></script>
-  <script src="js/astro.js?v=1.1.0"></script>
-  <script src="js/forecast-model.js?v=1.1.0"></script>
-  <script src="js/app.js?v=1.1.0"></script>
+  <script src="js/astro.js?v=1.2.0"></script>
+  <script src="js/forecast-model.js?v=1.2.0"></script>
+  <script src="js/lightpollution.js?v=1.2.0"></script>
+  <script src="js/app.js?v=1.2.0"></script>
 </body>
 </html>

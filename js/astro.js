@@ -1,4 +1,4 @@
-/* AstroSite — pure coordinate / astronomy helpers (no DOM). MIT License. */
+/* Astro Planner — pure coordinate / astronomy helpers (no DOM). MIT License. */
 (function (root) {
   'use strict';
 

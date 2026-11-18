@@ -1,4 +1,4 @@
-# AstroSite — observing-site coordinates for astrophotography
+# Astro Planner — site coordinates, sky brightness & night forecast for astrophotography
 
 **Live tool:** https://electroluminescent.github.io/astro-site-coords/
 
@@ -7,31 +7,28 @@ latitude / longitude / elevation format that astrophotography software asks for 
 
 ## Features
 
-- **Map** (Leaflet) with Dark, Streets, Satellite and Terrain layers; click the map or drag the marker to set the site.
-- **Search** by place name or address (OpenStreetMap Nominatim), or paste coordinates in almost any form:
-  - `43.589, -79.644` · `43.589 -79.644`
-  - `43°35'20.4"N 79°38'38.4"W` · `N43 35 20 W79 38 38` · `43:35:20, -79:38:38`
-  - `43 35 20.4 -79 38 38.4` (D M S pairs) · Maidenhead locators like `FN03eo`
-- **Device GPS** (📍 button): uses the browser Geolocation API (Chrome, Edge, Firefox, Safari, Android, iOS).
-  Requests a high-accuracy fix, falls back to a network fix, shows horizontal accuracy, and uses the GPS altitude
-  as the elevation when the device reports one (alongside the DEM ground elevation for comparison).
-- **Elevation** from the Copernicus 90 m DEM (Open-Meteo); editable for manual override.
-- **Coordinates** tab with a **By program / By type** toggle:
-  - *By program* — cards for N.I.N.A., ASTAP, MLAstro & generic tools, PixInsight, Siril, Stellarium,
-    KStars / Ekos / INDI (`indi_setprop` line), ASCOM / SGPro / APT / SharpCap / MaxIm DL, LX200 / OnStep serial
-    commands and a full FITS header block. **Pin** the programs you use to keep them at the top (remembered).
-  - *By type* — every distinct value listed once, grouped by subject (decimal, D·M·S, arc units/radians/time,
-    elevation, mount protocol, geocentric & grid, commands & FITS headers, time), tagged with the programs that use it.
-  - Export as TSV (Excel/Sheets), Markdown or JSON; share links (`#lat=…&lon=…`).
-- **Night forecast** — a 14-day, hour-by-hour grid modelled on Astrospheric's layout, one row per quantity:
-  imaging score · sun altitude · moon altitude · moon illumination (with phase disc) · total / low / mid / high cloud ·
-  transparency (Astrospheric scale) · seeing (estimated arcsec) · mist / fog (visibility) · wind speed · wind direction ·
-  gusts · temperature · dew point (fog/dew-risk marks) · humidity.
-  Darker blue = better. **Red cells mark hours with limited data** (an input missing and a fallback used — e.g. after the
-  ~4½-day aerosol forecast ends); hatched cells have no data. Scroll the grid, drag the slider, use ←/→ and PgUp/PgDn, or
-  the Prev / Tonight / Next night buttons; the selected hour shows a full breakdown and the night's twilight and moon times.
-- The last selected site, units, view and pins are remembered in the browser.
-- **Night mode** (red) for use at the telescope, and shareable links (`#lat=…&lon=…`).
+- **Map** (Leaflet) — Dark, Streets, Satellite, Terrain; **Light pollution** overlay toggle with opacity (David Lorenz atlas 2025).
+- **Search** by place name or address (Nominatim), or paste coordinates in almost any form
+  (`43.589, -79.644` · `43°35'20.4"N 79°38'38.4"W` · `N43 35 20 W79 38 38` · `43:35:20, -79:38:38` · Maidenhead `FN03eo`).
+- **Device GPS** via the browser Geolocation API (high-accuracy fix with network fallback, accuracy shown, GPS altitude used when reported).
+- **Elevation** from the Copernicus 90 m DEM (or device GPS altitude). Read-only.
+- **Sky brightness / Bortle** for the selected point: zenith mag/arcsec², light-pollution zone, artificial/natural ratio and approximate
+  Bortle class (Clear Sky Chart conversion of the Lorenz atlas ratios).
+- **Coordinates** tab, *By program* / *By type*:
+  - *By program* — N.I.N.A., ASTAP, MLAstro & generic tools, PixInsight, Siril, Stellarium, KStars / Ekos / INDI, ASCOM / SGPro / APT /
+    SharpCap / MaxIm DL, LX200 / OnStep, full FITS header block. **Pin** programs to the top; **Edit** to hide programs.
+  - *By type* — every distinct value once, grouped by subject; **pin** any value into a *Pinned* section at the top; **Edit** to hide groups.
+  - All labels come from one format registry, e.g. `Latitude (DMS, ±DD MM SS)`; program-specific field names (SITELAT, SiteLatitude…) are shown as tags.
+- **Night forecast** — 14-day hour-by-hour grid modelled on Astrospheric's layout, one row per quantity (sun altitude, moon altitude,
+  moon illumination, total/low/mid/high cloud, transparency, seeing, mist/fog, wind speed, direction, gusts, temperature, dew point, humidity).
+  Blue scale (darker = better); **solid red** = value missing or based on an estimated input. Hover any cell for its value; click a row label
+  to open that row's data source. Show/hide values, **Edit rows** to choose rows, day dividers, timeline slider with day ticks, ←/→ and
+  PgUp/PgDn, Prev / Tonight / Next night.
+- **Saved locations** — star a site, jump between saved sites, download the list and import it again.
+- **Settings backup** (⚙) — export every remembered setting (saved locations, pins, hidden rows/programs/groups, units, view, colour
+  scheme, sidebar width, map layers) to a JSON file and import it to restore; reset all.
+- **Colour scheme** — Default or **Night** (monochrome red theme for dark adaptation; map imagery converted luminance → red).
+- Resizable sidebar (width remembered), eased transitions throughout, last site remembered.
 
 ## Conventions
 
@@ -54,7 +51,8 @@ python3 -m http.server 8000
 
 [Leaflet](https://leafletjs.com) · [SunCalc](https://github.com/mourner/suncalc) ·
 [OpenStreetMap](https://www.openstreetmap.org/copyright) / [Nominatim](https://nominatim.org) ·
-[Open-Meteo](https://open-meteo.com) (forecast, elevation, CAMS aerosols) · Esri World Imagery · OpenTopoMap · CARTO.
+[Open-Meteo](https://open-meteo.com) (forecast, elevation, CAMS aerosols) ·
+[Light Pollution Atlas](https://djlorenz.github.io/astronomy/lp/) by David Lorenz · Esri World Imagery · OpenTopoMap · CARTO.
 
 MIT License.
 

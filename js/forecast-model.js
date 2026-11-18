@@ -1,4 +1,4 @@
-/* AstroSite — astronomical sky-quality estimates from standard NWP fields. MIT License.
+/* Astro Planner — astronomical sky-quality estimates from standard NWP fields. MIT License.
  *
  * Inputs come from Open-Meteo (best-match global/regional models + CAMS aerosols).
  * Seeing and transparency are *estimates* built from the same physical drivers that
@@ -80,22 +80,10 @@
     return { level: 0, label: 'Low dew risk' };
   }
 
-  /* Composite 0–100 imaging score for one hour (higher is better). */
-  function imagingScore({ cloud, trans, see, sunAlt, moonAlt, moonIllum, fogLevel }) {
-    if (sunAlt == null || sunAlt > -12) return null;
-    const c = cloud == null ? 0.5 : 1 - cloud / 100;
-    const tr = trans ? trans.rawCls / 5 : 0.6;
-    const se = see ? see.rawCls / 5 : 0.6;
-    const dark = sunAlt <= -18 ? 1 : 0.55;
-    const moon = moonAlt > 0 ? 1 - 0.45 * moonIllum * Math.min(1, moonAlt / 30 + 0.3) : 1;
-    const fogF = fogLevel >= 3 ? 0.1 : fogLevel === 2 ? 0.5 : 1;
-    return Math.round(100 * Math.pow(Math.max(0, c), 1.5) * (0.55 + 0.27 * tr + 0.18 * se) * dark * moon * fogF);
-  }
-
   const SEEING_LABELS = ['Cloudy', 'Poor', 'Below avg', 'Average', 'Above avg', 'Excellent'];
   const TRANS_LABELS = ['Cloudy', 'Poor', 'Below avg', 'Average', 'Above avg', 'Excellent'];
 
-  const api = { seeing, transparency, fog, dewRisk, imagingScore, pwvFromDewPoint, vecDiff, SEEING_LABELS, TRANS_LABELS, CLOUDY };
+  const api = { seeing, transparency, fog, dewRisk, pwvFromDewPoint, vecDiff, SEEING_LABELS, TRANS_LABELS, CLOUDY };
   root.SkyModel = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);

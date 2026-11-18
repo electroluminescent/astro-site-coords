@@ -1,4 +1,4 @@
-/* AstroSite — UI. MIT License. */
+/* Astro Planner — UI. MIT License. */
 (function () {
   'use strict';
   const A = window.Astro;
@@ -23,7 +23,7 @@
     name: '', sub: '',
     tz: null, utcOffset: null,
     clouds: null, // [{t: Date, c: %}]
-    fc: null, fcSel: null,
+    fc: null, fcSel: null, showVals: true, lp: null, lpErr: null, fcEdit: false,
     units: 'metric',
   };
 
@@ -48,6 +48,43 @@
   (baseLayers[savedLayer] || baseLayers.Dark).addTo(map);
   L.control.layers(baseLayers, null, { position: 'topright' }).addTo(map);
   L.control.scale({ imperial: true, metric: true }).addTo(map);
+
+  // Light-pollution overlay (Lorenz atlas tiles: 1024 px, native to zoom 8)
+  const lpLayer = L.tileLayer(window.LightPollution.overlayUrl, {
+    minZoom: 2, maxNativeZoom: 8, maxZoom: 19, tileSize: 1024, zoomOffset: -2, opacity: 0.5,
+    errorTileUrl: window.LightPollution.errorTile,
+    attribution: 'Light pollution: <a href="https://djlorenz.github.io/astronomy/lp/" target="_blank" rel="noopener">D. Lorenz atlas ' + window.LightPollution.YEAR + '</a>',
+  });
+  const LPControl = L.Control.extend({
+    options: { position: 'topright' },
+    onAdd() {
+      const div = L.DomUtil.create('div', 'leaflet-bar lp-ctl');
+      div.innerHTML = `<button type="button" class="lp-toggle" aria-pressed="false" title="Toggle light-pollution map">Light pollution</button>
+        <div class="lp-extra" hidden><input type="range" min="10" max="100" value="50" aria-label="Overlay opacity"><a href="${window.LightPollution.colorsUrl}" target="_blank" rel="noopener">key</a></div>`;
+      L.DomEvent.disableClickPropagation(div);
+      L.DomEvent.disableScrollPropagation(div);
+      const btn = div.querySelector('.lp-toggle');
+      const extra = div.querySelector('.lp-extra');
+      const range = div.querySelector('input');
+      const set = (on) => {
+        if (on) lpLayer.addTo(map); else map.removeLayer(lpLayer);
+        btn.setAttribute('aria-pressed', on); extra.hidden = !on;
+        try { localStorage.setItem('astrosite.lpmap', on ? '1' : '0'); } catch (e) { /* ignore */ }
+      };
+      btn.addEventListener('click', () => set(!map.hasLayer(lpLayer)));
+      range.addEventListener('input', () => {
+        lpLayer.setOpacity(range.value / 100);
+        try { localStorage.setItem('astrosite.lpopacity', range.value); } catch (e) { /* ignore */ }
+      });
+      try {
+        const op = localStorage.getItem('astrosite.lpopacity');
+        if (op) { range.value = op; lpLayer.setOpacity(op / 100); }
+        if (localStorage.getItem('astrosite.lpmap') === '1') setTimeout(() => set(true), 0);
+      } catch (e) { /* ignore */ }
+      return div;
+    },
+  });
+  map.addControl(new LPControl());
   map.on('baselayerchange', (e) => { try { localStorage.setItem('astrosite.layer', e.name); } catch (err) { /* ignore */ } });
 
   const markerIcon = L.divIcon({
@@ -135,7 +172,7 @@
       map.setView(ll, opts.zoom || Math.max(map.getZoom(), 11));
     }
 
-    if (opts.elev != null) { state.elev = opts.elev; state.elevSource = opts.elevSource || 'manual'; }
+    if (opts.elev != null) { state.elev = opts.elev; state.elevSource = opts.elevSource || 'device GPS'; }
 
     renderAll();
     updateHash();
@@ -143,6 +180,14 @@
     const seq = ++fetchSeq;
     fetchSiteData(seq, opts.elev == null);
     if (!state.name) reverseGeocode(seq);
+    state.lp = null; state.lpErr = null;
+    window.LightPollution.lookup(lat, lon).then((r) => {
+      if (seq !== fetchSeq) return;
+      state.lp = r; renderHead(); renderCoords();
+    }).catch((err) => {
+      if (seq !== fetchSeq) return;
+      state.lpErr = err.message; renderHead();
+    });
   }
 
   async function fetchSiteData(seq, wantElev) {
@@ -163,7 +208,7 @@
         state.elev = dem;
         state.elevSource = 'Copernicus DEM (90 m)';
       } else {
-        state.elev = 0; state.elevSource = 'unavailable — enter manually';
+        state.elev = 0; state.elevSource = 'unavailable';
       }
     }
     if (meta && meta.timezone) {
@@ -309,21 +354,32 @@
 
   /* ---------------- Head (name / elevation) ---------------- */
   $('#siteName').addEventListener('input', (e) => { state.name = e.target.value; renderPrograms(); updateHash(); });
-  $('#elevInput').addEventListener('input', (e) => {
-    const v = parseFloat(e.target.value);
-    if (!isFinite(v)) return;
-    state.elev = v; state.elevSource = 'manual entry';
-    $('#elevSrc').textContent = state.elevSource;
-    renderValues(); renderPrograms(); updateHash();
-  });
 
   function renderHead() {
     const nameEl = $('#siteName');
     if (document.activeElement !== nameEl) nameEl.value = state.name || '';
     $('#siteSub').textContent = state.lat == null ? 'Search, click the map, or use your location to begin' : (state.sub || `${fixed(state.lat, 5)}, ${fixed(state.lon, 5)}`);
-    const ei = $('#elevInput');
-    if (document.activeElement !== ei) ei.value = state.elev == null ? '' : Math.round(state.elev);
+    $('#elevInput').textContent = state.elev == null ? '…' : Math.round(state.elev);
     $('#elevSrc').textContent = state.elevSource === 'loading' ? 'looking up…' : state.elevSource;
+    const b = $('#skyBadge');
+    const LPm = window.LightPollution;
+    if (state.lat == null) { b.hidden = true; }
+    else {
+      b.hidden = false;
+      b.href = state.lp && !state.lp.outOfBounds ? LPm.colorsUrl : LPm.infoUrl;
+      if (state.lp && !state.lp.outOfBounds) {
+        const lp = state.lp;
+        b.innerHTML = `<i style="background:${lp.zoneColor}"></i>Bortle ~${lp.bortle} · ${lp.sqm.toFixed(2)} mag/arcsec² · LP zone ${lp.zone}`;
+        b.title = `Light Pollution Atlas ${lp.year} (D. Lorenz): artificial/natural brightness ${lp.ratio.toFixed(2)}. Bortle is an approximate conversion (Clear Sky Chart table). Click for the atlas colour key.`;
+      } else if (state.lp && state.lp.outOfBounds) {
+        b.textContent = 'Bortle: outside atlas coverage (65°S–75°N)';
+      } else if (state.lpErr) {
+        b.textContent = 'Bortle: light-pollution data unavailable';
+      } else {
+        b.textContent = 'Bortle: looking up…';
+      }
+    }
+    updateFavStar();
   }
 
   /* ---------------- Value model ---------------- */
@@ -345,59 +401,68 @@
     return `UTC${sign}${A.pad(Math.floor(a / 3600), 2)}:${A.pad(Math.floor((a % 3600) / 60), 2)}`;
   }
 
+  /* One registry of coordinate formats: every label used anywhere comes from here.
+     Naming scheme: "<Quantity> (<format>[, <sign/hemisphere convention>])". */
+  function formats() {
+    const { lat, lon } = state;
+    const h = elevM();
+    const e = A.ecef(lat, lon, h);
+    const F = (label, sub, v) => ({ label, sub, v });
+    return {
+      latDec: F('Latitude (decimal °)', '+ North', fixed(lat, 6)),
+      lonDec: F('Longitude (decimal °, +E)', 'ISO 6709 / ASCOM convention', fixed(lon, 6)),
+      lonDecW: F('Longitude (decimal °, +W)', 'classic LX200 / some planetarium apps', fixed(-lon, 6)),
+      lon360: F('Longitude (decimal °, 0–360 E)', 'INDI GEOGRAPHIC_COORD', fixed(A.mod(lon, 360), 6)),
+      pairDec: F('Latitude, Longitude (decimal °)', 'Google Maps / GPS', `${fixed(lat, 6)}, ${fixed(lon, 6)}`),
+      latDecH: F('Latitude (decimal °, N/S)', '', `${Math.abs(lat).toFixed(6)}° ${lat < 0 ? 'S' : 'N'}`),
+      lonDecH: F('Longitude (decimal °, E/W)', '', `${Math.abs(lon).toFixed(6)}° ${lon < 0 ? 'W' : 'E'}`),
+      latDMS: F('Latitude (DMS, N/S)', '', A.dmsHemi(lat, true)),
+      lonDMS: F('Longitude (DMS, E/W)', '', A.dmsHemi(lon, false)),
+      latDMSa: F('Latitude (DMS, N/S, ASCII)', 'plain-keyboard symbols', A.dmsAscii(lat, true)),
+      lonDMSa: F('Longitude (DMS, E/W, ASCII)', 'plain-keyboard symbols', A.dmsAscii(lon, false)),
+      latColon: F('Latitude (DMS, ±DD:MM:SS)', '', A.dmsSigned(lat, ':', 2, 2)),
+      lonColon: F('Longitude (DMS, ±DDD:MM:SS, +E)', '', A.dmsSigned(lon, ':', 2, 3)),
+      latSpace: F('Latitude (DMS, ±DD MM SS)', 'FITS string style', A.dmsSigned(lat, ' ', 2, 2)),
+      lonSpace: F('Longitude (DMS, ±DDD MM SS, +E)', 'FITS string style', A.dmsSigned(lon, ' ', 2, 3)),
+      latDDM: F('Latitude (DDM, N/S)', 'degrees + decimal minutes', A.ddmHemi(lat, true)),
+      lonDDM: F('Longitude (DDM, E/W)', 'degrees + decimal minutes', A.ddmHemi(lon, false)),
+      latArcmin: F('Latitude (arcminutes)', '', `${fixed(lat * 60, 3)}′`),
+      latArcsec: F('Latitude (arcseconds)', '', `${fixed(lat * 3600, 1)}″`),
+      lonArcmin: F('Longitude (arcminutes, +E)', '', `${fixed(lon * 60, 3)}′`),
+      lonArcsec: F('Longitude (arcseconds, +E)', '', `${fixed(lon * 3600, 1)}″`),
+      latRad: F('Latitude (radians)', '', fixed(lat * A.D2R, 9)),
+      lonRad: F('Longitude (radians, +E)', '', fixed(lon * A.D2R, 9)),
+      lonTime: F('Longitude (time, h m s)', 'local mean time offset from UT', A.hmsFromDeg(lon)),
+      lonHours: F('Longitude (decimal hours, +E)', '', fixed(lon / 15, 6)),
+      elevM: F('Elevation (m)', state.elevSource || '', fixed(h, 0)),
+      elevFt: F('Elevation (ft)', '', fixed(h / 0.3048, 0)),
+      elevKm: F('Elevation (km)', '', fixed(h / 1000, 3)),
+      lxLat: F('Latitude (LX200, ±DD*MM)', 'serial protocol', A.lx200Lat(lat)),
+      lxLon: F('Longitude (LX200, DDD*MM, +W)', 'serial protocol', A.lx200Long(lon)),
+      ecefX: F('Geocentric X (m)', 'WGS84 ECEF · FITS OBSGEO-X', fixed(e.x, 2)),
+      ecefY: F('Geocentric Y (m)', 'WGS84 ECEF · FITS OBSGEO-Y', fixed(e.y, 2)),
+      ecefZ: F('Geocentric Z (m)', 'WGS84 ECEF · FITS OBSGEO-Z', fixed(e.z, 2)),
+      grid: F('Maidenhead locator', 'amateur-radio grid square', A.maidenhead(lat, lon)),
+    };
+  }
+
   function buildGroups() {
+    const FM = formats();
     const { lat, lon } = state;
     const h = elevM();
     const lonW = -lon;
     const lon360 = A.mod(lon, 360);
     const e = A.ecef(lat, lon, h);
     return [
-      {
-        title: 'Decimal degrees',
-        rows: [
-          ['Latitude', 'signed, + North', fixed(lat, 6)],
-          ['Longitude', 'signed, + East (ISO 6709, ASCOM, N.I.N.A.)', fixed(lon, 6)],
-          ['Longitude', '+ West (classic LX200, some planetarium apps)', fixed(lonW, 6)],
-          ['Longitude 0–360° East', 'INDI / KStars GEOGRAPHIC_COORD', fixed(lon360, 6)],
-          ['Lat, Lon pair', 'Google Maps / GPS', `${fixed(lat, 6)}, ${fixed(lon, 6)}`],
-          ['Latitude (hemisphere)', '', `${Math.abs(lat).toFixed(6)}° ${lat < 0 ? 'S' : 'N'}`],
-          ['Longitude (hemisphere)', '', `${Math.abs(lon).toFixed(6)}° ${lon < 0 ? 'W' : 'E'}`],
-        ],
-      },
-      {
-        title: 'Degrees · arcminutes · arcseconds',
-        rows: [
-          ['Latitude DMS', '', A.dmsHemi(lat, true)],
-          ['Longitude DMS', '', A.dmsHemi(lon, false)],
-          ['Latitude DMS (ASCII)', '', A.dmsAscii(lat, true)],
-          ['Longitude DMS (ASCII)', '', A.dmsAscii(lon, false)],
-          ['Latitude sDD:MM:SS', 'colon separated', A.dmsSigned(lat, ':', 2, 2)],
-          ['Longitude sDDD:MM:SS', 'colon separated, + East', A.dmsSigned(lon, ':', 2, 3)],
-          ['Latitude sDD MM SS', 'space separated (FITS string style)', A.dmsSigned(lat, ' ', 2, 2)],
-          ['Longitude sDDD MM SS', 'space separated, + East', A.dmsSigned(lon, ' ', 2, 3)],
-          ['Latitude D° M.mmmm′', 'degrees + decimal minutes', A.ddmHemi(lat, true)],
-          ['Longitude D° M.mmmm′', 'degrees + decimal minutes', A.ddmHemi(lon, false)],
-        ],
-      },
-      {
-        title: 'Arc units, radians & time',
-        rows: [
-          ['Latitude in arcminutes', '', `${fixed(lat * 60, 3)}′`],
-          ['Latitude in arcseconds', '', `${fixed(lat * 3600, 1)}″`],
-          ['Longitude in arcminutes', '+ East', `${fixed(lon * 60, 3)}′`],
-          ['Longitude in arcseconds', '+ East', `${fixed(lon * 3600, 1)}″`],
-          ['Latitude (radians)', '', fixed(lat * A.D2R, 9)],
-          ['Longitude (radians)', '+ East', fixed(lon * A.D2R, 9)],
-          ['Longitude as time', 'offset of local mean time from UT', A.hmsFromDeg(lon)],
-          ['Longitude as decimal hours', '+ East', fixed(lon / 15, 6)],
-        ],
-      },
+      ...[
+        ['Decimal degrees', ['latDec', 'lonDec', 'lonDecW', 'lon360', 'pairDec', 'latDecH', 'lonDecH']],
+        ['Degrees · arcminutes · arcseconds', ['latDMS', 'lonDMS', 'latDMSa', 'lonDMSa', 'latColon', 'lonColon', 'latSpace', 'lonSpace', 'latDDM', 'lonDDM']],
+        ['Arc units, radians & time', ['latArcmin', 'latArcsec', 'lonArcmin', 'lonArcsec', 'latRad', 'lonRad', 'lonTime', 'lonHours']],
+      ].map(([title, keys]) => ({ title, rows: keys.map((k) => [FM[k].label, FM[k].sub, FM[k].v, null, k]) })),
       {
         title: 'Elevation',
         rows: [
-          ['Elevation (m)', state.elevSource || '', fixed(h, 0)],
-          ['Elevation (ft)', '', fixed(h / 0.3048, 0)],
-          ['Elevation (km)', '', fixed(h / 1000, 3)],
+          ...['elevM', 'elevFt', 'elevKm'].map((k) => [FM[k].label, FM[k].sub, FM[k].v, null, k]),
           ...(state.demElev != null && state.elevSource !== 'Copernicus DEM (90 m)' ? [['Ground elevation (DEM)', 'Copernicus 90 m model', `${fixed(state.demElev, 0)} m`]] : []),
           ...(state.gps ? [
             ['GPS altitude', state.gps.alt != null ? `device reported${state.gps.altAcc != null ? `, ±${Math.round(state.gps.altAcc)} m` : ''}` : 'not provided by this device', state.gps.alt != null ? `${fixed(state.gps.alt, 1)} m` : '—'],
@@ -408,12 +473,20 @@
       {
         title: 'Geocentric & grid',
         rows: [
-          ['OBSGEO-X (m)', 'WGS84 ECEF, height treated as ellipsoidal', fixed(e.x, 2)],
-          ['OBSGEO-Y (m)', '', fixed(e.y, 2)],
-          ['OBSGEO-Z (m)', '', fixed(e.z, 2)],
-          ['Maidenhead locator', 'amateur-radio grid square', A.maidenhead(lat, lon)],
+          ...['ecefX', 'ecefY', 'ecefZ', 'grid'].map((k) => [FM[k].label, FM[k].sub, FM[k].v, null, k]),
         ],
       },
+      { title: 'Mount protocol', rows: ['lxLat', 'lxLon'].map((k) => [FM[k].label, FM[k].sub, FM[k].v, null, k]) },
+      ...(state.lp && !state.lp.outOfBounds ? [{
+        title: 'Sky brightness',
+        rows: [
+          ['Bortle class (approx.)', 'from atlas ratio · Clear Sky Chart table', state.lp.bortle],
+          ['Zenith sky brightness', `mag/arcsec² · Lorenz atlas ${state.lp.year}`, state.lp.sqm.toFixed(2)],
+          ['Light pollution zone', 'Lorenz atlas colour key', state.lp.zone],
+          ['Artificial / natural brightness', 'ratio', state.lp.ratio < 0.1 ? state.lp.ratio.toFixed(3) : state.lp.ratio.toFixed(2)],
+          ['Naked-eye limiting magnitude', 'estimated from sky brightness', state.lp.nelm.toFixed(1)],
+        ],
+      }] : []),
       {
         title: 'Time',
         rows: [
@@ -438,32 +511,37 @@
   };
 
   /* ---------------- Coordinates tab: by program (pinnable) or by type (deduplicated) ---------------- */
-  let pins = [];
-  try { pins = JSON.parse(localStorage.getItem('astrosite.pins') || '[]'); } catch (e) { pins = []; }
+  const loadSet = (k) => { try { return new Set(JSON.parse(localStorage.getItem(k) || '[]')); } catch (e) { return new Set(); } };
+  const saveSet = (k, set) => { try { localStorage.setItem(k, JSON.stringify([...set])); } catch (e) { /* ignore */ } };
+  const progHidden = loadSet('astrosite.progHidden');
+  // Pins are ordered lists (pin order = display order)
+  const loadList = (k) => { try { const v = JSON.parse(localStorage.getItem(k) || '[]'); return Array.isArray(v) ? v : []; } catch (e) { return []; } };
+  const saveList = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* ignore */ } };
+  let progPins = loadList('astrosite.pins');
+  let rowPins = loadList('astrosite.rowPins');
+  const PIN_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 3l6 6-3 1-4 4 1 5-2 2-4-5-5 5H3v-1l5-5-5-4 2-2 5 1 4-4z"/></svg>';
+  const pinBtn = (kind, id, on, label) => `<button class="pin${on ? ' on' : ''}" data-pin-kind="${kind}" data-pin="${esc(id)}" aria-pressed="${on}" title="${on ? 'Unpin' : 'Pin to top'}${label ? ` — ${esc(label)}` : ''}">${PIN_SVG}</button>`;
+  const typeHidden = loadSet('astrosite.typeHidden');
+  let coordEdit = false;
   let coordView = 'program';
   try { coordView = localStorage.getItem('astrosite.view') === 'type' ? 'type' : 'program'; } catch (e) { /* ignore */ }
-
-  const kindOf = (label) => (/lat/i.test(label) ? 'lat' : /lon/i.test(label) ? 'lon' : /elev|height|altitude/i.test(label) ? 'elev' : 'other');
-  function classify(label, v) {
-    if (/\*/.test(v)) return 'Mount protocol';
-    if (kindOf(label) === 'elev' && /^-?\d+(\.\d+)?$/.test(v)) return 'Elevation';
-    if (/^[-+]?\d+(\.\d+)?(, [-+]?\d+(\.\d+)?)?$/.test(v)) return 'Decimal degrees';
-    return 'Degrees · arcminutes · arcseconds';
-  }
 
   // Every distinct value once, grouped by subject, tagged with the programs that use it.
   function byType() {
     const progs = programs();
-    const groups = buildGroups().map((g) => ({ title: g.title, rows: g.rows.map(([k, sub, v, lv]) => ({ k, sub, v, lv, progs: [] })) }));
+    const groups = buildGroups().map((g) => ({ title: g.title, rows: g.rows.map(([k, sub, v, lv, key]) => ({ k, sub, v, lv, key, progs: [] })) }));
     const group = (title) => {
       let g = groups.find((x) => x.title === title);
       if (!g) { g = { title, rows: [] }; groups.push(g); }
       return g;
     };
-    progs.forEach((p) => (p.rows || []).forEach(([k, v]) => {
-      const hit = groups.flatMap((g) => g.rows).find((r) => !r.lv && r.v === v && (kindOf(r.k) === kindOf(k) || kindOf(k) === 'other'));
-      if (hit) { if (!hit.progs.includes(p.short)) hit.progs.push(p.short); }
-      else group(classify(k, v)).rows.push({ k, sub: '', v, progs: [p.short] });
+    const byKey = new Map();
+    groups.forEach((g) => g.rows.forEach((r) => { if (r.key) byKey.set(r.key, r); }));
+    progs.forEach((p) => (p.rows || []).forEach(([key, field]) => {
+      const r = byKey.get(key);
+      if (!r) return;
+      const tag = field ? `${p.short} · ${field}` : p.short;
+      if (!r.progs.includes(tag)) r.progs.push(tag);
     }));
     const snips = progs.filter((p) => p.snippet);
     const lines = (p) => p.snippet.split('\n');
@@ -475,30 +553,41 @@
     });
     const sg = group('Commands & FITS headers');
     kept.forEach((p) => sg.rows.push({ k: p.snippetLabel, sub: '', v: p.snippet, snip: true, progs: [p.short, ...(p.also || [])] }));
-    const order = ['Decimal degrees', 'Degrees · arcminutes · arcseconds', 'Arc units, radians & time', 'Elevation', 'Mount protocol', 'Geocentric & grid', 'Commands & FITS headers', 'Time'];
+    const order = ['Decimal degrees', 'Degrees · arcminutes · arcseconds', 'Arc units, radians & time', 'Elevation', 'Mount protocol', 'Geocentric & grid', 'Sky brightness', 'Commands & FITS headers', 'Time'];
     return groups.filter((g) => g.rows.length).sort((a, b) => order.indexOf(a.title) - order.indexOf(b.title));
   }
 
   function renderByType(box) {
-    box.innerHTML = byType().map((g) => `
-      <div class="vgroup"><h3>${esc(g.title)}</h3>
-        <table class="vals"><tbody>
-        ${g.rows.map((r) => {
-          const tags = r.progs.length ? `<span class="tags">${r.progs.map((t) => `<em>${esc(t)}</em>`).join('')}</span>` : '';
-          const label = `<td class="k">${esc(r.k)}${r.sub ? `<small>${esc(r.sub)}</small>` : ''}${tags}</td>`;
-          if (r.snip) return `<tr>${label}<td><pre class="snip inrow" title="Click to copy">${esc(r.v)}</pre></td></tr>`;
-          return `<tr>${label}<td class="v"${r.lv ? ` data-live="${r.lv}"` : ''} title="Click to copy">${esc(r.lv ? live[r.lv]() : r.v)}</td></tr>`;
-        }).join('')}
-        </tbody></table>
+    const all = byType();
+    const rowId = (r) => r.key || r.k;
+    const rowHtml = (r) => {
+      const pinned = rowPins.includes(rowId(r));
+      const label = `<td class="k"><div class="k-row">${pinBtn('row', rowId(r), pinned, r.k)}<span>${esc(r.k)}${r.sub ? `<small>${esc(r.sub)}</small>` : ''}</span></div></td>`;
+      if (r.snip) return `<tr>${label}<td><pre class="snip inrow" title="Click to copy">${esc(r.v)}</pre></td></tr>`;
+      return `<tr>${label}<td class="v"${r.lv ? ` data-live="${r.lv}"` : ''} title="Click to copy">${esc(r.lv ? live[r.lv]() : r.v)}</td></tr>`;
+    };
+    const flat = new Map();
+    all.forEach((g) => g.rows.forEach((r) => flat.set(rowId(r), r)));
+    const pinnedRows = rowPins.map((id) => flat.get(id)).filter(Boolean);
+    const groups = all.filter((g) => coordEdit || !typeHidden.has(g.title));
+    let html = pinnedRows.length ? `<div class="vgroup pinned-group"><h3>Pinned</h3><table class="vals"><tbody>${pinnedRows.map((r) => rowHtml(r)).join('')}</tbody></table></div>` : '';
+    html += groups.map((g) => `
+      <div class="vgroup${typeHidden.has(g.title) ? ' off' : ''}"><h3>${coordEdit ? `<label class="sw"><input type="checkbox" data-toggle="${esc(g.title)}" ${typeHidden.has(g.title) ? '' : 'checked'}><span></span></label>` : ''}${esc(g.title)}</h3>
+        <table class="vals"><tbody>${g.rows.map((r) => rowHtml(r)).join('')}</tbody></table>
       </div>`).join('');
+    if (!groups.length && !pinnedRows.length) html = '<p class="muted pad">All groups are hidden. Use Edit to choose which to show.</p>';
+    box.innerHTML = html;
   }
 
   function renderCoords() {
     const box = $('#coordsBody');
     $$('#tab-coords [data-view]').forEach((b) => b.classList.toggle('on', b.dataset.view === coordView));
-    $('#viewHint').textContent = coordView === 'program'
-      ? 'Values formatted the way each program expects. Pin the programs you use to keep them at the top. Click any value to copy it.'
-      : 'Every distinct value once, grouped by type. Tags show which programs use each format. Click any value to copy it.';
+    const eb = $('#coordEdit');
+    eb.textContent = coordEdit ? 'Done' : 'Edit';
+    eb.setAttribute('aria-pressed', coordEdit);
+    const hint = $('#viewHint');
+    hint.hidden = !coordEdit;
+    hint.textContent = coordView === 'program' ? 'Tick the programs to show.' : 'Tick the groups to show.';
     if (state.lat == null) {
       box.innerHTML = '<p class="muted" style="padding:12px 0">No site selected yet. Search for a place, paste coordinates, click the map, or use your GPS.</p>';
       return;
@@ -509,19 +598,47 @@
   const renderValues = renderCoords;
 
   $$('#tab-coords [data-view]').forEach((b) => b.addEventListener('click', () => {
+    if (coordView === b.dataset.view) return;
     coordView = b.dataset.view;
     try { localStorage.setItem('astrosite.view', coordView); } catch (e) { /* ignore */ }
     renderCoords();
+    animateIn($('#coordsBody'));
   }));
 
   document.addEventListener('click', (e) => {
-    const pb = e.target.closest('button[data-pin]');
-    if (!pb) return;
-    const name = pb.dataset.pin;
-    pins = pins.includes(name) ? pins.filter((n) => n !== name) : [...pins, name];
-    try { localStorage.setItem('astrosite.pins', JSON.stringify(pins)); } catch (err) { /* ignore */ }
+    const b = e.target.closest('button[data-pin]');
+    if (!b) return;
+    e.stopPropagation();
+    const id = b.dataset.pin;
+    if (b.dataset.pinKind === 'prog') {
+      progPins = progPins.includes(id) ? progPins.filter((x) => x !== id) : [...progPins, id];
+      saveList('astrosite.pins', progPins);
+      toast(progPins.includes(id) ? `Pinned ${id}` : `Unpinned ${id}`);
+    } else {
+      rowPins = rowPins.includes(id) ? rowPins.filter((x) => x !== id) : [...rowPins, id];
+      saveList('astrosite.rowPins', rowPins);
+      toast(rowPins.includes(id) ? 'Pinned to the top' : 'Unpinned');
+    }
+    const sc = $('#tab-coords').scrollTop;
     renderCoords();
-    toast(pins.includes(name) ? `Pinned ${name} to the top` : `Unpinned ${name}`);
+    animateIn($('#coordsBody'));
+    $('#tab-coords').scrollTop = sc;
+  });
+
+  // Edit mode: switch programs (By program) or groups (By type) on and off
+  $('#coordEdit').addEventListener('click', () => {
+    coordEdit = !coordEdit;
+    renderCoords();
+    animateIn($('#coordsBody'));
+  });
+  $('#coordsBody').addEventListener('change', (e) => {
+    const cb = e.target.closest('input[data-toggle]');
+    if (!cb) return;
+    const set = coordView === 'type' ? typeHidden : progHidden;
+    if (cb.checked) set.delete(cb.dataset.toggle); else set.add(cb.dataset.toggle);
+    saveSet(coordView === 'type' ? 'astrosite.typeHidden' : 'astrosite.progHidden', set);
+    const host = cb.closest('.pcard, .vgroup');
+    if (host) host.classList.toggle('off', !cb.checked);
   });
 
   // Copy on click for any value cell / snippet
@@ -559,26 +676,14 @@
         name: 'N.I.N.A.',
         short: 'N.I.N.A.',
         where: 'Options › General › Astrometry — Latitude, Longitude, Elevation. West longitudes are negative; a stray minus sign is the usual cause of mount / sync errors.',
-        rows: [
-          ['Latitude', fixed(lat, 6)],
-          ['Longitude', fixed(lon, 6)],
-          ['Elevation (m)', String(elevR)],
-          ['Latitude (DMS)', A.dmsSigned(lat, ' ', 2, 2)],
-          ['Longitude (DMS)', A.dmsSigned(lon, ' ', 2, 3)],
-        ],
+        rows: [['latDec', 'Latitude'], ['lonDec', 'Longitude'], ['elevM', 'Elevation'], ['latSpace'], ['lonSpace']],
       },
       {
         name: 'ASTAP',
         short: 'ASTAP',
         snippetLabel: 'FITS site keywords',
-        where: 'ASTAP reads the site from the FITS header (SITELAT / SITELONG / SITEELEV) for airmass, annotation and photometry. Use these in its header editor or wherever it asks for latitude / longitude; it accepts decimal or space-separated D M S.',
-        rows: [
-          ['Latitude (decimal)', fixed(lat, 6)],
-          ['Longitude (decimal, +E)', fixed(lon, 6)],
-          ['Latitude (D M S)', A.dmsSigned(lat, ' ', 1, 2)],
-          ['Longitude (D M S)', A.dmsSigned(lon, ' ', 1, 3)],
-          ['Elevation (m)', String(elevR)],
-        ],
+        where: 'ASTAP reads the site from the FITS header (SITELAT / SITELONG / SITEELEV) for airmass, annotation and photometry. Use these in its header editor or wherever it asks for latitude / longitude; it accepts decimal or space-separated DMS.',
+        rows: [['latDec', 'SITELAT'], ['lonDec', 'SITELONG'], ['latSpace'], ['lonSpace'], ['elevM', 'SITEELEV']],
         snippet: [
           fitsCard('SITELAT', `#${fixed(lat, 6)}`, '[deg] Observatory latitude'),
           fitsCard('SITELONG', `#${fixed(lon, 6)}`, '[deg] Observatory longitude (E+)'),
@@ -589,25 +694,14 @@
         name: 'MLAstro & other generic tools',
         short: 'MLAstro / generic',
         where: 'For tools that just ask for "latitude / longitude / elevation" — pick whichever format the field accepts.',
-        rows: [
-          ['Latitude, Longitude (decimal)', `${fixed(lat, 6)}, ${fixed(lon, 6)}`],
-          ['Latitude (decimal)', fixed(lat, 6)],
-          ['Longitude (decimal, +E)', fixed(lon, 6)],
-          ['Latitude (DMS)', A.dmsAscii(lat, true)],
-          ['Longitude (DMS)', A.dmsAscii(lon, false)],
-          ['Elevation (m)', String(elevR)],
-        ],
+        rows: [['pairDec'], ['latDec'], ['lonDec'], ['latDMSa'], ['lonDMSa'], ['elevM']],
       },
       {
         name: 'PixInsight',
         short: 'PixInsight',
         snippetLabel: 'OBSGEO keywords',
-        where: 'ImageSolver / SPFC / observation metadata use OBSGEO-L/B/H (also SITELONG / SITELAT). Observer-location dialogs take signed D M S.',
-        rows: [
-          ['Longitude (D M S, +E)', A.dmsSigned(lon, ' ', 2, 3)],
-          ['Latitude (D M S)', A.dmsSigned(lat, ' ', 2, 2)],
-          ['Height (m)', String(elevR)],
-        ],
+        where: 'ImageSolver / SPFC / observation metadata use OBSGEO-L/B/H (also SITELONG / SITELAT). Observer-location dialogs take signed DMS.',
+        rows: [['lonSpace', 'Longitude'], ['latSpace', 'Latitude'], ['elevM', 'Height']],
         snippet: [
           fitsCard('OBSGEO-L', `#${fixed(lon, 6)}`, '[deg] Geodetic longitude (E+)'),
           fitsCard('OBSGEO-B', `#${fixed(lat, 6)}`, '[deg] Geodetic latitude'),
@@ -618,59 +712,34 @@
         name: 'Siril',
         short: 'Siril',
         where: 'Siril reads SITELAT / SITELONG / SITEELEV from FITS headers (decimal degrees, East positive).',
-        rows: [
-          ['SITELAT', fixed(lat, 6)],
-          ['SITELONG', fixed(lon, 6)],
-          ['SITEELEV', String(elevR)],
-        ],
+        rows: [['latDec', 'SITELAT'], ['lonDec', 'SITELONG'], ['elevM', 'SITEELEV']],
       },
       {
         name: 'Stellarium',
         short: 'Stellarium',
         where: 'Location window (F6) — Latitude, Longitude, Altitude.',
-        rows: [
-          ['Latitude', A.dmsHemi(lat, true)],
-          ['Longitude', A.dmsHemi(lon, false)],
-          ['Altitude (m)', String(elevR)],
-          ['Latitude (decimal)', fixed(lat, 6)],
-          ['Longitude (decimal)', fixed(lon, 6)],
-        ],
+        rows: [['latDMS', 'Latitude'], ['lonDMS', 'Longitude'], ['elevM', 'Altitude'], ['latDec'], ['lonDec']],
       },
       {
         name: 'KStars / Ekos / INDI',
         short: 'KStars / INDI',
         snippetLabel: 'INDI indi_setprop command',
-        where: 'KStars Geographic dialog takes signed D:M:S (East +). INDI drivers use GEOGRAPHIC_COORD with longitude 0–360° East.',
-        rows: [
-          ['KStars latitude', A.dmsSigned(lat, ':', 0, 2)],
-          ['KStars longitude', A.dmsSigned(lon, ':', 0, 3)],
-          ['INDI LAT', fixed(lat, 6)],
-          ['INDI LONG (0–360 E)', fixed(A.mod(lon, 360), 6)],
-          ['INDI ELEV (m)', String(elevR)],
-        ],
+        where: 'KStars Geographic dialog takes signed colon-separated DMS (East +). INDI drivers use GEOGRAPHIC_COORD with longitude 0–360° East.',
+        rows: [['latColon', 'KStars Latitude'], ['lonColon', 'KStars Longitude'], ['latDec', 'INDI LAT'], ['lon360', 'INDI LONG'], ['elevM', 'INDI ELEV']],
         snippet: `indi_setprop "Telescope Simulator.GEOGRAPHIC_COORD.LAT;LONG;ELEV=${fixed(lat, 6)};${fixed(A.mod(lon, 360), 6)};${elevR}"`,
       },
       {
         name: 'ASCOM drivers / SGPro / APT / SharpCap / MaxIm DL',
         short: 'ASCOM · SGPro · APT · SharpCap · MaxIm',
-        where: 'ASCOM SiteLatitude / SiteLongitude / SiteElevation are decimal degrees, East positive. Most Windows capture suites accept decimal; MaxIm and APT also accept D M S.',
-        rows: [
-          ['SiteLatitude', fixed(lat, 6)],
-          ['SiteLongitude', fixed(lon, 6)],
-          ['SiteElevation (m)', String(elevR)],
-          ['Latitude (D M S)', A.dmsSigned(lat, ' ', 1, 2)],
-          ['Longitude (D M S)', A.dmsSigned(lon, ' ', 1, 3)],
-        ],
+        where: 'ASCOM SiteLatitude / SiteLongitude / SiteElevation are decimal degrees, East positive. Most Windows capture suites accept decimal; MaxIm and APT also accept DMS.',
+        rows: [['latDec', 'SiteLatitude'], ['lonDec', 'SiteLongitude'], ['elevM', 'SiteElevation'], ['latSpace'], ['lonSpace']],
       },
       {
         name: 'LX200 / OnStep / Meade serial',
         short: 'LX200 / OnStep',
         snippetLabel: 'LX200 serial commands',
-        where: 'Classic LX200 protocol: latitude sDD*MM, longitude DDD*MM measured West-positive (0–360).',
-        rows: [
-          ['Latitude', A.lx200Lat(lat)],
-          ['Longitude (+W)', A.lx200Long(lon)],
-        ],
+        where: 'Classic LX200 protocol: latitude ±DD*MM, longitude DDD*MM measured West-positive (0–360).',
+        rows: [['lxLat', ':St'], ['lxLon', ':Sg']],
         snippet: `:St${A.lx200Lat(lat)}#\n:Sg${A.lx200Long(lon)}#`,
       },
       {
@@ -695,22 +764,23 @@
   }
 
   function renderProgramCards(box) {
-    const list = programs();
-    const pinned = pins.map((n) => list.find((p) => p.name === n)).filter(Boolean);
-    const rest = list.filter((p) => !pins.includes(p.name));
-    const card = (p, isPinned) => `
-      <section class="pcard${isPinned ? ' pinned' : ''}">
-        <header><h4>${esc(p.name)}</h4>
-          <button class="pin" data-pin="${esc(p.name)}" aria-pressed="${isPinned}" title="${isPinned ? 'Unpin' : 'Pin to top'}">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 3l6 6-3 1-4 4 1 5-2 2-4-5-5 5H3v-1l5-5-5-4 2-2 5 1 4-4z"/></svg>${isPinned ? 'Pinned' : 'Pin'}
-          </button>
-        </header>
+    const FM = formats();
+    const visible = programs().filter((p) => coordEdit || !progHidden.has(p.name));
+    const pinned = progPins.map((n) => visible.find((p) => p.name === n)).filter(Boolean);
+    const rest = visible.filter((p) => !progPins.includes(p.name));
+    if (!visible.length) { box.innerHTML = '<p class="muted pad">All programs are hidden. Use Edit to choose which to show.</p>'; return; }
+    const card = (p) => {
+      const on = !progHidden.has(p.name);
+      const isPinned = progPins.includes(p.name);
+      return `
+      <section class="pcard${on ? '' : ' off'}${isPinned ? ' pinned' : ''}">
+        <header>${coordEdit ? `<label class="sw"><input type="checkbox" data-toggle="${esc(p.name)}" ${on ? 'checked' : ''}><span></span></label>` : ''}<h4>${esc(p.name)}</h4>${pinBtn('prog', p.name, isPinned, p.name)}</header>
         <div class="where">${esc(p.where)}</div>
-        ${p.rows ? `<table class="vals"><tbody>${p.rows.map(([k, v]) => `<tr><td class="k">${esc(k)}</td><td class="v" title="Click to copy">${esc(v)}</td></tr>`).join('')}</tbody></table>` : ''}
+        ${p.rows ? `<table class="vals"><tbody>${p.rows.map(([key, field]) => `<tr><td class="k">${esc(FM[key].label)}${field ? `<code class="field" title="Field / keyword name in ${esc(p.name)}">${esc(field)}</code>` : ''}</td><td class="v" title="Click to copy">${esc(FM[key].v)}</td></tr>`).join('')}</tbody></table>` : ''}
         ${p.snippet ? `<pre class="snip" title="Click to copy">${esc(p.snippet)}</pre>` : ''}
       </section>`;
-    box.innerHTML = (pinned.length ? `<div class="pin-head">Pinned</div>${pinned.map((p) => card(p, true)).join('')}<div class="pin-head">All programs</div>` : '')
-      + rest.map((p) => card(p, false)).join('');
+    };
+    box.innerHTML = (pinned.length ? `<div class="pin-head">Pinned</div>${pinned.map(card).join('')}${rest.length ? '<div class="pin-head">Other programs</div>' : ''}` : '') + rest.map(card).join('');
   }
   const renderPrograms = renderCoords;
 
@@ -744,7 +814,8 @@
   function moonDisc(frac, phase) {
     const lit = Math.round(frac * 100);
     const dir = (phase < 0.5) === (state.lat >= 0) ? 'to left' : 'to right';
-    return `<i class="mdisc" style="background:linear-gradient(${dir}, #f2ecc8 ${lit}%, #2a3046 ${lit}%)"></i>`;
+    const [litC, darkC] = isNight() ? ['#ff8080', '#2a0000'] : ['#f2ecc8', '#2a3046'];
+    return `<i class="mdisc" style="background:linear-gradient(${dir}, ${litC} ${lit}%, ${darkC} ${lit}%)"></i>`;
   }
 
   const COMPASS = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
@@ -798,7 +869,6 @@
       h.trans = SM.transparency(h);
       h.fog = SM.fog(h);
       h.dewRisk = SM.dewRisk(h.fog.spread);
-      h.score = SM.imagingScore({ cloud: h.cloud, trans: h.trans, see: h.see, sunAlt: h.sunAlt, moonAlt: h.moonAlt, moonIllum: h.moonIllum, fogLevel: h.fog.level });
       return h;
     });
     // Drop hours that are already past (keep the previous hour for context)
@@ -808,81 +878,93 @@
     return { hours, aodHours, model: 'Open-Meteo best match + CAMS aerosols' };
   }
 
-  /* Colour scales: darker = better. Blue when the hour has full data, red when inputs are missing or estimated. */
+  /* Colour scale (computed, not hand-drawn): each row maps its value to a 0–1 quality q, and q sets the
+     lightness of one blue hue — darker = better. Any hour whose value is missing or relies on an estimated
+     input is drawn solid red instead, with no gradient. */
+  const isNight = () => document.body.classList.contains('night');
   function shade(q, limited) {
+    const night = isNight();
+    if (limited) return night ? { bg: '#ff1f1f', fg: '#000' } : { bg: '#b3261e', fg: '#fff' };
     if (q == null || !isFinite(q)) return null;
     q = Math.max(0, Math.min(1, q));
+    if (night) {
+      // monochrome red: worse = brighter red, better = darker (keeps "darker is better")
+      const L = 46 - q * 42; // 46% → 4%
+      return { bg: `hsl(0 100% ${L}%)`, fg: L > 26 ? '#000' : '#ffa0a0' };
+    }
     const L = 88 - q * 70; // 88% (worst, near white) → 18% (best)
     const S = 25 + q * 50;
-    const hue = limited ? 2 : 216;
-    return { bg: `hsl(${hue} ${limited ? S + 10 : S}% ${L}%)`, fg: L < 55 ? '#eef3ff' : '#0b1220' };
+    return { bg: `hsl(216 ${S}% ${L}%)`, fg: L < 55 ? '#eef3ff' : '#0b1220' };
   }
   const clamp01 = (x) => Math.max(0, Math.min(1, x));
 
-  // Row definitions: each returns {q, txt, lim, nodata, mark, title}
+  const MODEL_SRC = 'https://github.com/electroluminescent/astro-site-coords/blob/main/js/forecast-model.js';
+  const SUNCALC_SRC = 'https://github.com/mourner/suncalc';
+  const omq = (vars) => `${OPEN_METEO}/forecast?latitude=${state.lat.toFixed(4)}&longitude=${state.lon.toFixed(4)}&timezone=auto&forecast_days=${FC_DAYS}&wind_speed_unit=ms&hourly=${vars}`;
+
+  // Row definitions: cell(h) returns {q, txt|html, tip, lim, nodata, mark, warn2}
   function rowDefs() {
     const n = (v, d = 0) => (v == null ? '' : (+v).toFixed(d));
+    const cloudy = (h) => (h.cloud != null && h.cloud >= SM.CLOUDY ? ' · sky cloudy' : '');
     return [
-      { key: 'score', label: 'Imaging score', sub: '0–100 · higher = better', group: 'Summary',
-        cell: (h) => {
-          if (h.score == null) return { q: null, txt: '', day: true };
-          const lim = !!(h.trans && (h.trans.aodEst || h.trans.pwvEst)) || h.see == null || h.vis == null;
-          return { q: h.score / 100, txt: String(h.score), lim, nodata: h.cloud == null };
-        } },
-      { key: 'sun', label: 'Sun altitude', sub: '° · twilight / darkness', group: 'Darkness',
-        cell: (h) => ({ q: clamp01(-h.sunAlt / 18), txt: String(Math.round(h.sunAlt)), title: `Sun ${h.sunAlt.toFixed(1)}° — ${h.sunAlt <= -18 ? 'astronomical night' : h.sunAlt <= -12 ? 'astronomical twilight' : h.sunAlt <= -6 ? 'nautical twilight' : h.sunAlt <= 0 ? 'civil twilight' : 'day'}` }) },
-      { key: 'moonAlt', label: 'Moon altitude', sub: '° above horizon', group: 'Moonlight',
+      { key: 'sun', label: 'Sun altitude', sub: '° · twilight', group: 'Darkness', src: () => SUNCALC_SRC,
+        cell: (h) => ({ q: clamp01(-h.sunAlt / 18), txt: String(Math.round(h.sunAlt)),
+          tip: `${h.sunAlt.toFixed(1)}° — ${h.sunAlt <= -18 ? 'astronomical night' : h.sunAlt <= -12 ? 'astronomical twilight' : h.sunAlt <= -6 ? 'nautical twilight' : h.sunAlt <= 0 ? 'civil twilight' : 'day'}` }) },
+      { key: 'moonAlt', label: 'Moon altitude', sub: '° above horizon', group: 'Moonlight', src: () => SUNCALC_SRC,
         cell: (h) => (h.moonAlt > 0
-          ? { q: 1 - clamp01(h.moonAlt / 60) * (0.35 + 0.65 * h.moonIllum), txt: String(Math.round(h.moonAlt)), title: `Moon ${h.moonAlt.toFixed(1)}° above the horizon` }
-          : { q: 1, txt: '', title: `Moon below horizon (${h.moonAlt.toFixed(0)}°)` }) },
-      { key: 'moonIllum', label: 'Moon illumination', sub: '% lit · phase', group: 'Moonlight',
-        cell: (h) => ({ q: 1 - h.moonIllum, html: `${moonDisc(h.moonIllum, h.moonPhase)}${Math.round(h.moonIllum * 100)}`, title: `${Math.round(h.moonIllum * 100)}% illuminated — ${moonPhaseName(h.moonPhase)}${h.moonAlt > 0 ? ', above horizon' : ', below horizon'}` }) },
-      { key: 'cloud', label: 'Cloud cover', sub: 'total %', group: 'Sky',
-        cell: (h) => (h.cloud == null ? { nodata: true } : { q: 1 - h.cloud / 100, txt: n(h.cloud), lim: h.cloudLow == null || h.cloudHigh == null }) },
-      { key: 'cloudLow', label: 'Low cloud', sub: '% · below 2 km', group: 'Sky',
-        cell: (h) => (h.cloudLow == null ? { nodata: true } : { q: 1 - h.cloudLow / 100, txt: n(h.cloudLow) }) },
-      { key: 'cloudMid', label: 'Mid cloud', sub: '% · 2–6 km', group: 'Sky',
-        cell: (h) => (h.cloudMid == null ? { nodata: true } : { q: 1 - h.cloudMid / 100, txt: n(h.cloudMid) }) },
-      { key: 'cloudHigh', label: 'High cloud', sub: '% · above 6 km (cirrus)', group: 'Sky',
-        cell: (h) => (h.cloudHigh == null ? { nodata: true } : { q: 1 - h.cloudHigh / 100, txt: n(h.cloudHigh) }) },
-      { key: 'trans', label: 'Transparency', sub: 'water vapour · aerosol · cirrus', group: 'Sky',
+          ? { q: 1 - clamp01(h.moonAlt / 60) * (0.35 + 0.65 * h.moonIllum), txt: String(Math.round(h.moonAlt)), tip: `${h.moonAlt.toFixed(1)}° above the horizon` }
+          : { q: 1, txt: '', tip: `below the horizon (${h.moonAlt.toFixed(0)}°)` }) },
+      { key: 'moonIllum', label: 'Moon illumination', sub: '% lit · phase', group: 'Moonlight', src: () => SUNCALC_SRC,
+        cell: (h) => ({ q: 1 - h.moonIllum, html: `${moonDisc(h.moonIllum, h.moonPhase)}${Math.round(h.moonIllum * 100)}`, tip: `${Math.round(h.moonIllum * 100)}% lit — ${moonPhaseName(h.moonPhase)}` }) },
+      { key: 'cloud', label: 'Cloud cover', sub: '% total', group: 'Sky', src: () => omq('cloud_cover'),
+        cell: (h) => (h.cloud == null ? { nodata: true } : { q: 1 - h.cloud / 100, txt: n(h.cloud), tip: `${n(h.cloud)}%` }) },
+      { key: 'cloudLow', label: 'Low cloud', sub: '% · below 2 km', group: 'Sky', src: () => omq('cloud_cover_low'),
+        cell: (h) => (h.cloudLow == null ? { nodata: true } : { q: 1 - h.cloudLow / 100, txt: n(h.cloudLow), tip: `${n(h.cloudLow)}%` }) },
+      { key: 'cloudMid', label: 'Mid cloud', sub: '% · 2–6 km', group: 'Sky', src: () => omq('cloud_cover_mid'),
+        cell: (h) => (h.cloudMid == null ? { nodata: true } : { q: 1 - h.cloudMid / 100, txt: n(h.cloudMid), tip: `${n(h.cloudMid)}%` }) },
+      { key: 'cloudHigh', label: 'High cloud', sub: '% · above 6 km', group: 'Sky', src: () => omq('cloud_cover_high'),
+        cell: (h) => (h.cloudHigh == null ? { nodata: true } : { q: 1 - h.cloudHigh / 100, txt: n(h.cloudHigh), tip: `${n(h.cloudHigh)}%` }) },
+      { key: 'trans', label: 'Transparency', sub: 'index · lower = clearer', group: 'Sky', src: () => MODEL_SRC,
         cell: (h) => {
           if (!h.trans) return { nodata: true };
-          const lim = h.trans.aodEst || h.trans.pwvEst;
-          if (h.trans.cls === 0) return { q: 0, txt: '', lim, title: `Cloudy (index ${h.trans.index.toFixed(0)})` };
-          return { q: clamp01(1 - h.trans.index / 30), txt: String(h.trans.cls), lim, title: `${SM.TRANS_LABELS[h.trans.cls]} · index ${h.trans.index.toFixed(1)}${lim ? ' · estimated inputs' : ''}` };
+          const t = h.trans;
+          const lim = t.aodEst || t.pwvEst;
+          return { q: clamp01(1 - t.index / 30), txt: String(Math.round(t.index)), lim,
+            tip: `${t.index.toFixed(1)} — ${SM.TRANS_LABELS[t.rawCls]}${cloudy(h)} · water vapour ${t.pwv.toFixed(1)} mm${t.pwvEst ? ' (est.)' : ''} · aerosol ${t.aod.toFixed(2)}${t.aodEst ? ' (assumed — beyond aerosol forecast)' : ''}` };
         } },
-      { key: 'see', label: 'Seeing', sub: 'est. arcsec', group: 'Sky',
+      { key: 'see', label: 'Seeing', sub: 'arcsec (est.)', group: 'Sky', src: () => MODEL_SRC,
         cell: (h) => {
           if (!h.see) return { nodata: true };
           const lim = h.wd850 == null || h.wd500 == null || h.wd300 == null || h.gust == null;
-          if (h.see.cls === 0) return { q: 0, txt: '', lim, title: `Cloudy (est. ${h.see.arcsec.toFixed(1)}″)` };
-          return { q: clamp01((4.5 - h.see.arcsec) / 3.5), txt: h.see.arcsec.toFixed(1), lim, title: `${SM.SEEING_LABELS[h.see.cls]} · ~${h.see.arcsec.toFixed(1)}″ · jet ${h.see.jet.toFixed(0)} m/s` };
+          return { q: clamp01((4.5 - h.see.arcsec) / 3.5), txt: h.see.arcsec.toFixed(1), lim,
+            tip: `~${h.see.arcsec.toFixed(1)}″ — ${SM.SEEING_LABELS[h.see.rawCls]}${cloudy(h)} · jet ${Math.round(U.wind(h.see.jet))} ${U.windU()}` };
         } },
-      { key: 'fog', label: 'Mist / fog', sub: `visibility`, group: 'Ground',
+      { key: 'fog', label: 'Mist / fog', sub: 'visibility', group: 'Ground', src: () => omq('visibility,temperature_2m,dew_point_2m'),
         cell: (h) => {
           const f = h.fog;
           if (f.vis == null && f.spread == null) return { nodata: true };
           const q = f.vis != null ? clamp01(Math.log10(Math.max(f.vis, 200) / 200) / 2) : clamp01(f.spread / 6);
           const v = U.vis(f.vis);
-          return { q, txt: f.vis == null ? '' : v >= 20 ? '' : v.toFixed(v < 10 ? 1 : 0), lim: f.vis == null, mark: f.level >= 1, title: `${f.label}${f.vis != null ? ` · visibility ${U.vis(f.vis).toFixed(1)} ${U.visU()}` : ' · no visibility data, judged from dew-point spread'}` };
+          return { q, txt: f.vis == null ? '' : v >= 20 ? '20+' : v.toFixed(v < 10 ? 1 : 0), lim: f.vis == null, mark: f.level >= 1,
+            tip: `${f.label}${f.vis != null ? ` · ${v.toFixed(1)} ${U.visU()}` : ' · no visibility data (judged from dew-point spread)'}` };
         } },
-      { key: 'wind', label: 'Wind speed', sub: '10 m', group: 'Ground',
-        cell: (h) => (h.wind == null ? { nodata: true } : { q: clamp01(1 - h.wind / 12), txt: String(Math.round(U.wind(h.wind))), title: `${Math.round(U.wind(h.wind))} ${U.windU()}` }) },
-      { key: 'wdir', label: 'Wind direction', sub: 'arrow = blowing toward', group: 'Ground',
-        cell: (h) => (h.wdir == null ? { nodata: true } : { q: clamp01(1 - (h.wind || 0) / 12), lim: h.wind == null, html: `<i class="arr" style="transform:rotate(${(h.wdir + 180) % 360}deg)">↑</i>`, title: `From ${compass(h.wdir)} (${Math.round(h.wdir)}°)` }) },
-      { key: 'gust', label: 'Wind gusts', sub: '', group: 'Ground',
-        cell: (h) => (h.gust == null ? { nodata: true } : { q: clamp01(1 - h.gust / 18), txt: String(Math.round(U.wind(h.gust))) }) },
-      { key: 'temp', label: 'Temperature', sub: '', group: 'Ground',
-        cell: (h) => (h.temp == null ? { nodata: true } : { q: clamp01(1 - (h.temp + 20) / 55), txt: String(Math.round(U.temp(h.temp))) }) },
-      { key: 'dew', label: 'Dew point', sub: 'orange = fog / dew risk', group: 'Ground',
+      { key: 'wind', label: 'Wind speed', sub: '10 m', group: 'Ground', src: () => omq('wind_speed_10m'),
+        cell: (h) => (h.wind == null ? { nodata: true } : { q: clamp01(1 - h.wind / 12), txt: String(Math.round(U.wind(h.wind))), tip: `${Math.round(U.wind(h.wind))} ${U.windU()}` }) },
+      { key: 'wdir', label: 'Wind direction', sub: 'arrow = toward', group: 'Ground', src: () => omq('wind_direction_10m'),
+        cell: (h) => (h.wdir == null ? { nodata: true } : { q: clamp01(1 - (h.wind || 0) / 12), lim: h.wind == null, html: `<i class="arr" style="transform:rotate(${(h.wdir + 180) % 360}deg)">↑</i>`, tip: `from ${compass(h.wdir)} (${Math.round(h.wdir)}°)` }) },
+      { key: 'gust', label: 'Wind gusts', sub: '', group: 'Ground', src: () => omq('wind_gusts_10m'),
+        cell: (h) => (h.gust == null ? { nodata: true } : { q: clamp01(1 - h.gust / 18), txt: String(Math.round(U.wind(h.gust))), tip: `${Math.round(U.wind(h.gust))} ${U.windU()}` }) },
+      { key: 'temp', label: 'Temperature', sub: '2 m', group: 'Ground', src: () => omq('temperature_2m'),
+        cell: (h) => (h.temp == null ? { nodata: true } : { q: clamp01(1 - (h.temp + 20) / 55), txt: String(Math.round(U.temp(h.temp))), tip: `${U.temp(h.temp).toFixed(1)} ${U.tempU()}` }) },
+      { key: 'dew', label: 'Dew point', sub: 'orange = dew risk', group: 'Ground', src: () => omq('dew_point_2m'),
         cell: (h) => {
           if (h.dew == null) return { nodata: true };
           const sp = h.fog.spread;
-          return { q: sp == null ? null : clamp01(sp / 8), txt: String(Math.round(U.temp(h.dew))), lim: h.temp == null, mark: h.dewRisk.level >= 1, warn2: h.dewRisk.level >= 2, title: `${h.dewRisk.label}${sp != null ? ` · spread ${U.spread(sp).toFixed(1)}${U.tempU()}` : ''}` };
+          return { q: sp == null ? null : clamp01(sp / 8), txt: String(Math.round(U.temp(h.dew))), lim: h.temp == null, mark: h.dewRisk.level >= 1, warn2: h.dewRisk.level >= 2,
+            tip: `${U.temp(h.dew).toFixed(1)} ${U.tempU()}${sp != null ? ` · spread ${U.spread(sp).toFixed(1)}° · ${h.dewRisk.label}` : ''}` };
         } },
-      { key: 'rh', label: 'Humidity', sub: '%', group: 'Ground',
-        cell: (h) => (h.rh == null ? { nodata: true } : { q: clamp01(1 - (h.rh - 30) / 70), txt: String(Math.round(h.rh)) }) },
+      { key: 'rh', label: 'Humidity', sub: '%', group: 'Ground', src: () => omq('relative_humidity_2m'),
+        cell: (h) => (h.rh == null ? { nodata: true } : { q: clamp01(1 - (h.rh - 30) / 70), txt: String(Math.round(h.rh)), tip: `${Math.round(h.rh)}%` }) },
     ];
   }
 
@@ -937,7 +1019,8 @@
       state.fcSel = Math.max(0, i);
     }
 
-    const rows = rowDefs();
+    const fcHidden = loadSet('astrosite.fcHidden');
+    const rows = rowDefs().filter((r) => state.fcEdit || !fcHidden.has(r.key));
     // Day header (local dates)
     const dayGroups = [];
     hours.forEach((h, i) => {
@@ -946,29 +1029,39 @@
       dayGroups[dayGroups.length - 1].n++;
     });
     const nowIdx = hours.findIndex((h, i) => i + 1 < hours.length && hours[i + 1].t.getTime() > Date.now());
+    const dayStart = new Set(dayGroups.slice(1).map((g) => g.start));
+    const ds = (i) => (dayStart.has(i) ? ' ds' : '');
 
-    let html = '<table class="fc"><thead>';
-    html += `<tr class="fc-days"><th class="fc-lbl"></th>${dayGroups.map((g) => `<th colspan="${g.n}" class="fc-day"><span class="dl">${g.n >= 3 ? esc(g.lbl) : ''}</span></th>`).join('')}</tr>`;
-    html += `<tr class="fc-hours"><th class="fc-lbl">Hour <span class="muted">(${esc(state.tz || 'local')})</span></th>${hours.map((h, i) => {
+    let html = `<table class="fc${state.showVals ? '' : ' novals'}"><thead>`;
+    html += `<tr class="fc-days"><th class="fc-lbl" colspan="2"></th>${dayGroups.map((g) => `<th colspan="${g.n}" class="fc-day${ds(g.start)}"><span class="dl">${g.n >= 3 ? esc(g.lbl) : ''}</span></th>`).join('')}</tr>`;
+    html += `<tr class="fc-hours"><th class="fc-lbl" colspan="2">Hour <span class="muted">(${esc(state.tz || 'local')})</span></th>${hours.map((h, i) => {
       const dark = h.sunAlt <= -18 ? 'd4' : h.sunAlt <= -12 ? 'd3' : h.sunAlt <= -6 ? 'd2' : h.sunAlt <= 0 ? 'd1' : 'd0';
-      return `<th data-c="${i}" class="${dark}${i === nowIdx ? ' now' : ''}">${fmtHour(h.t)}</th>`;
+      return `<th data-c="${i}" class="${dark}${i === nowIdx ? ' now' : ''}${ds(i)}">${fmtHour(h.t)}</th>`;
     }).join('')}</tr></thead><tbody>`;
     let lastGroup = '';
     rows.forEach((r) => {
       if (r.group !== lastGroup) {
-        html += `<tr class="fc-group"><th class="fc-lbl">${esc(r.group)}</th><td colspan="${hours.length}"></td></tr>`;
+        html += `<tr class="fc-group"><th class="fc-lbl" colspan="2">${esc(r.group)}</th><td colspan="${hours.length}"></td></tr>`;
         lastGroup = r.group;
       }
       const unit = r.key === 'wind' || r.key === 'gust' ? U.windU() : r.key === 'temp' || r.key === 'dew' ? U.tempU() : r.key === 'fog' ? U.visU() : '';
-      html += `<tr class="fc-row${r.minor ? ' minor' : ''}"><th class="fc-lbl">${esc(r.label)}<small>${esc([r.sub, unit].filter(Boolean).join(' · '))}</small></th>`;
+      const sub = [r.sub, unit].filter(Boolean).join(' · ');
+      const off = fcHidden.has(r.key);
+      const chk = state.fcEdit ? `<input type="checkbox" class="rowchk" data-row="${r.key}" ${off ? '' : 'checked'} aria-label="Show ${esc(r.label)}">` : '';
+      html += `<tr class="fc-row${off ? ' off' : ''}" data-row="${r.key}"><th class="fc-lbl">${chk}<a href="${esc(r.src())}" target="_blank" rel="noopener" title="Open the data source for ${esc(r.label)} in a new tab">${esc(r.label)}</a></th><th class="fc-sub">${esc(sub)}</th>`;
       hours.forEach((h, i) => {
         const c = r.cell(h);
-        if (c.nodata) { html += `<td data-c="${i}" class="nd" title="No data for this hour">·</td>`; return; }
-        const col = c.day ? null : shade(c.q, c.lim);
-        const cls = [c.mark ? (c.warn2 ? 'mk2' : 'mk') : '', c.lim ? 'lim' : '', c.day ? 'day' : ''].filter(Boolean).join(' ');
+        const when = `${fmtDay(h.t)} ${fmtTime(h.t)}`;
+        if (c.nodata) {
+          const nd = shade(null, true);
+          html += `<td data-c="${i}" class="nd${ds(i)}" style="background:${nd.bg};color:${nd.fg}" data-tip="${esc(`${r.label} · ${when}\nNo data for this hour`)}">–</td>`;
+          return;
+        }
+        const col = shade(c.q, c.lim);
+        const cls = [c.mark ? (c.warn2 ? 'mk2' : 'mk') : '', c.lim ? 'lim' : '', dayStart.has(i) ? 'ds' : ''].filter(Boolean).join(' ');
         const style = col ? ` style="background:${col.bg};color:${col.fg}"` : '';
-        const title = c.title ? ` title="${esc(c.title)}${c.lim ? ' — limited data' : ''}"` : (c.lim ? ' title="Limited data — some inputs missing or estimated"' : '');
-        html += `<td data-c="${i}"${cls ? ` class="${cls}"` : ''}${style}${title}>${c.html || esc(c.txt || '')}</td>`;
+        const tip = `${r.label} · ${when}\n${c.tip || c.txt || ''}${c.lim ? '\nLimited data — an input is missing or estimated' : ''}`;
+        html += `<td data-c="${i}"${cls ? ` class="${cls}"` : ''}${style} data-tip="${esc(tip)}">${c.html || esc(c.txt || '')}</td>`;
       });
       html += '</tr>';
     });
@@ -976,7 +1069,7 @@
 
     const firstLimitedTrans = hours.findIndex((h) => h.trans && h.trans.aodEst);
     const tzLabel = state.tz ? `${state.tz} (${offsetString(state.utcOffset)})` : `approx. ${offsetString(siteOffsetSec())}`;
-    const scaleBar = (lim) => `<span class="scale">${[0, 0.25, 0.5, 0.75, 1].map((q) => `<i style="background:${shade(q, lim).bg}"></i>`).join('')}</span>`;
+    const scaleBar = () => `<span class="scale">${[0, 0.25, 0.5, 0.75, 1].map((q) => `<i style="background:${shade(q, false).bg}"></i>`).join('')}</span>`;
 
     box.innerHTML = `
       <div class="fc-nav">
@@ -985,30 +1078,41 @@
           <button class="btn small" data-nav="tonight">Tonight</button>
           <button class="btn small" data-nav="next" title="Next night (Page Down)">Next night ▶</button>
         </div>
+        <div class="fc-nav-right">
+        <button class="btn small${state.fcEdit ? ' on' : ''}" id="fcEditBtn" aria-pressed="${state.fcEdit}" title="Choose which rows to show">${state.fcEdit ? 'Done' : 'Edit rows'}</button>
+        <label class="chk"><input type="checkbox" id="fcVals" ${state.showVals ? 'checked' : ''}> Show values</label>
         <div class="seg" role="group" aria-label="Units">
           <button data-units="metric" class="${state.units === 'metric' ? 'on' : ''}">Metric</button>
           <button data-units="imperial" class="${state.units === 'imperial' ? 'on' : ''}">Imperial</button>
         </div>
+        </div>
       </div>
-      <input type="range" class="fc-slider" min="0" max="${hours.length - 1}" value="${state.fcSel}" aria-label="Scroll through the forecast hours">
+      <div class="fc-timeline">
+        <input type="range" class="fc-slider" min="0" max="${hours.length - 1}" value="${state.fcSel}" aria-label="Scroll through the forecast hours">
+        <div class="fc-ticks" aria-hidden="true">${dayGroups.map((g) => {
+          const pct = (g.start / Math.max(1, hours.length - 1)) * 100;
+          const lbl = fmtDay(hours[g.start].t).split(' ').slice(0, 2).join(' ');
+          return `<span style="left:calc(${pct.toFixed(3)}% + ${(8 - pct * 0.16).toFixed(2)}px)"><i></i>${g.n >= 6 ? `<b>${esc(lbl)}</b>` : ''}</span>`;
+        }).join('')}</div>
+      </div>
       <div class="fc-scroll" tabindex="0" aria-label="Hourly forecast grid; use arrow keys to move between hours">${html}</div>
+
       <div class="fc-legend">
-        <span>${scaleBar(false)} full data</span>
-        <span>${scaleBar(true)} limited data (inputs missing or estimated)</span>
-        <span><i class="nd-swatch">·</i> no data</span>
+        <span>${scaleBar()} worse → better</span>
+        <span><i class="red-swatch"></i> missing or estimated data</span>
         <span><i class="mk-swatch"></i> fog / dew risk</span>
-        <span class="muted">Darker = better. ${esc(tzLabel)}.</span>
+        <span class="muted">${esc(tzLabel)}</span>
       </div>
-      ${firstLimitedTrans > 0 ? `<p class="fc-note">Aerosol (smoke / haze) forecasts end ${esc(fmtDay(hours[firstLimitedTrans].t))} ${fmtTime(hours[firstLimitedTrans].t)}; after that, transparency and the imaging score assume typical clean air and are shown in red.</p>` : ''}
+      ${firstLimitedTrans > 0 ? `<p class="fc-note">Aerosol (smoke / haze) forecasts end ${esc(fmtDay(hours[firstLimitedTrans].t))} ${fmtTime(hours[firstLimitedTrans].t)}; after that, transparency assumes typical clean air and is shown in red.</p>` : ''}
       <div id="fcDetail"></div>
       <div id="fcNight"></div>
       <details class="fc-about">
         <summary>About these forecasts</summary>
         <p><b>Cloud cover</b> (total and low / mid / high layers), <b>visibility</b>, <b>wind</b>, <b>temperature</b>, <b>dew point</b> and <b>humidity</b> come straight from the Open-Meteo best-match weather models (14 days). Long-range hours come from coarser global models, so treat days 8–14 as a trend.</p>
         <p><b>Transparency</b> follows Astrospheric's scale: index 0–5 excellent, 6–9 above average, 10–13 average, 14–23 below average, 24–27 poor, above 27 cloudy. It's estimated here from precipitable water vapour, CAMS aerosol optical depth (smoke, dust, haze), high-cloud fraction and surface pressure (elevation).</p>
-        <p><b>Seeing</b> is an estimate in arcseconds from jet-stream speed (300 / 200 hPa), vertical wind shear between 850, 500 and 300 hPa, and surface gusts. Ratings: excellent &lt;1.4″, above average &lt;1.9″, average &lt;2.6″, below average &lt;3.4″, poor beyond that. Above ${SM.CLOUDY}% cloud, both are reported as cloudy.</p>
+        <p><b>Seeing</b> is an estimate in arcseconds from jet-stream speed (300 / 200 hPa), vertical wind shear between 850, 500 and 300 hPa, and surface gusts. Ratings: excellent &lt;1.4″, above average &lt;1.9″, average &lt;2.6″, below average &lt;3.4″, poor beyond that. Values are shown even under cloud; the tooltip notes when the sky is cloudy (≥ ${SM.CLOUDY}%).</p>
         <p><b>Mist / fog</b> uses forecast visibility: under 1 km is fog, 1–5 km is mist. An orange mark means radiation fog or heavy dew is likely (temperature within 2 °C of the dew point; amber within 4 °C).</p>
-        <p><b>Red cells</b> mark hours where an input was missing and a fallback was used, for example typical aerosol levels beyond the aerosol forecast range, or dew-point-derived water vapour.</p>
+        <p><b>Colours</b> are generated per value: each row converts its value to a 0–1 quality score with a fixed formula, and that score sets the lightness of a single blue (darker = better). <b>Solid red</b> marks an hour whose value is missing or relies on an estimated input, for example typical aerosol levels beyond the aerosol forecast range. Hover over any cell for its exact value; click a row label to open its data source.</p>
       </details>
       <h5 class="sec">Open this site in</h5>
       <div class="links">
@@ -1021,10 +1125,52 @@
     const scroller = $('.fc-scroll', box);
     const slider = $('.fc-slider', box);
     scroller.addEventListener('click', (e) => {
+      if (e.target.closest('a, input')) return;
       const cell = e.target.closest('[data-c]');
       if (cell) selectHour(+cell.dataset.c, false);
     });
     slider.addEventListener('input', () => selectHour(+slider.value, true));
+    $('#fcEditBtn', box).addEventListener('click', () => {
+      state.fcEdit = !state.fcEdit;
+      const sl = scroller.scrollLeft;
+      renderTonight();
+      $('.fc-scroll').scrollLeft = sl;
+      animateIn($('.fc-scroll'));
+    });
+    scroller.addEventListener('change', (e) => {
+      const cb = e.target.closest('input.rowchk');
+      if (!cb) return;
+      const set = loadSet('astrosite.fcHidden');
+      if (cb.checked) set.delete(cb.dataset.row); else set.add(cb.dataset.row);
+      saveSet('astrosite.fcHidden', set);
+      cb.closest('tr').classList.toggle('off', !cb.checked);
+    });
+    $('#fcVals', box).addEventListener('change', (e) => {
+      state.showVals = e.target.checked;
+      try { localStorage.setItem('astrosite.fcvals', state.showVals ? '1' : '0'); } catch (err) { /* ignore */ }
+      $('table.fc', box).classList.toggle('novals', !state.showVals);
+    });
+    let tipEl = $('#fcTip');
+    if (!tipEl) { tipEl = document.createElement('div'); tipEl.id = 'fcTip'; tipEl.className = 'fc-tip'; tipEl.hidden = true; document.body.appendChild(tipEl); }
+    const moveTip = (e) => {
+      const pad = 14;
+      let x = e.clientX + pad, y = e.clientY + pad;
+      const r = tipEl.getBoundingClientRect();
+      if (x + r.width > window.innerWidth - 8) x = e.clientX - r.width - pad;
+      if (y + r.height > window.innerHeight - 8) y = e.clientY - r.height - pad;
+      tipEl.style.left = `${x}px`; tipEl.style.top = `${y}px`;
+    };
+    scroller.addEventListener('mouseover', (e) => {
+      const td = e.target.closest('td[data-tip]');
+      if (!td) { tipEl.hidden = true; return; }
+      const [head, ...rest] = td.dataset.tip.split('\n');
+      tipEl.innerHTML = `<b>${esc(head)}</b>${rest.map((l) => `<div>${esc(l)}</div>`).join('')}`;
+      tipEl.hidden = false;
+      moveTip(e);
+    });
+    scroller.addEventListener('mousemove', (e) => { if (!tipEl.hidden) moveTip(e); });
+    scroller.addEventListener('mouseleave', () => { tipEl.hidden = true; });
+    scroller.addEventListener('scroll', () => { tipEl.hidden = true; });
     scroller.addEventListener('keydown', (e) => {
       const step = { ArrowRight: 1, ArrowLeft: -1, PageDown: 'next', PageUp: 'prev', Home: 'tonight' }[e.key];
       if (step == null) return;
@@ -1079,7 +1225,9 @@
       }
     }
     renderHourDetail(hours[i]);
+    const nightBefore = lastNightKey;
     renderNightSummary(hours[i].t);
+    if (lastNightKey !== nightBefore && !instant) animateIn($('#fcNight'));
   }
 
   function renderHourDetail(h) {
@@ -1087,10 +1235,10 @@
     if (!el) return;
     const v = (x, d = 0) => (x == null ? '—' : (+x).toFixed(d));
     const limTag = (b) => (b ? ' <span class="limtag">limited</span>' : '');
-    const seeTxt = h.see ? (h.see.cls === 0 ? `Cloudy (~${h.see.arcsec.toFixed(1)}″ if clear)` : `${SM.SEEING_LABELS[h.see.cls]} · ~${h.see.arcsec.toFixed(1)}″`) : '—';
-    const trTxt = h.trans ? `${SM.TRANS_LABELS[h.trans.cls]} · index ${h.trans.index.toFixed(1)}` : '—';
+    const cl = h.cloud != null && h.cloud >= SM.CLOUDY ? ' (sky cloudy)' : '';
+    const seeTxt = h.see ? `~${h.see.arcsec.toFixed(1)}″ · ${SM.SEEING_LABELS[h.see.rawCls]}${cl}` : '—';
+    const trTxt = h.trans ? `index ${h.trans.index.toFixed(1)} · ${SM.TRANS_LABELS[h.trans.rawCls]}${cl}` : '—';
     const items = [
-      ['Imaging score', h.score == null ? 'daylight / twilight' : `${h.score} / 100`],
       ['Sun', `${h.sunAlt.toFixed(1)}° ${h.sunAlt <= -18 ? '(astronomical night)' : h.sunAlt <= -12 ? '(astro twilight)' : h.sunAlt <= -6 ? '(nautical twilight)' : h.sunAlt <= 0 ? '(civil twilight)' : '(day)'}`],
       ['Moon', h.moonAlt > 0 ? `${h.moonAlt.toFixed(0)}° high · ${Math.round(h.moonIllum * 100)}% lit` : `below horizon · ${Math.round(h.moonIllum * 100)}% lit`],
       ['Cloud', `${v(h.cloud)}% (low ${v(h.cloudLow)} · mid ${v(h.cloudMid)} · high ${v(h.cloudHigh)})`],
@@ -1133,12 +1281,174 @@
       </div>`;
   }
 
+  /* ---------------- Saved (favourite) locations ---------------- */
+  let favs = [];
+  try { favs = JSON.parse(localStorage.getItem('astrosite.favs') || '[]').filter((f) => isFinite(f.lat) && isFinite(f.lon)); } catch (e) { favs = []; }
+  const sameSpot = (a, b) => Math.abs(a.lat - b.lat) < 1e-5 && Math.abs(a.lon - b.lon) < 1e-5;
+  const saveFavs = () => { try { localStorage.setItem('astrosite.favs', JSON.stringify(favs)); } catch (e) { toast('Could not save — browser storage unavailable'); } };
+  const currentFavIdx = () => (state.lat == null ? -1 : favs.findIndex((f) => sameSpot(f, state)));
+
+  function updateFavStar() {
+    const star = $('#favToggle');
+    if (!star) return;
+    star.hidden = state.lat == null;
+    const on = currentFavIdx() >= 0;
+    star.textContent = on ? '★' : '☆';
+    star.setAttribute('aria-pressed', on);
+    star.title = on ? 'Remove from saved locations' : 'Save this location';
+    $('#favCount').textContent = favs.length ? favs.length : '';
+  }
+
+  function renderFavs() {
+    const ul = $('#favsList');
+    if (!favs.length) {
+      ul.innerHTML = '<li class="empty">No saved locations yet. Pick a site and press ☆ next to its name.</li>';
+      return;
+    }
+    ul.innerHTML = favs.map((f, i) => `<li data-i="${i}"${state.lat != null && sameSpot(f, state) ? ' class="cur"' : ''}>
+        <button class="go" data-i="${i}"><span class="fn">${esc(f.name || 'Unnamed site')}</span>
+          <span class="fs">${(+f.lat).toFixed(5)}, ${(+f.lon).toFixed(5)}${f.elev != null ? ` · ${Math.round(f.elev)} m` : ''}${f.bortle ? ` · Bortle ~${esc(f.bortle)}` : ''}</span></button>
+        <button class="rm" data-rm="${i}" title="Remove" aria-label="Remove ${esc(f.name || 'site')}">×</button>
+      </li>`).join('');
+  }
+
+  $('#favToggle').addEventListener('click', () => {
+    const i = currentFavIdx();
+    if (i >= 0) { favs.splice(i, 1); toast('Removed from saved locations'); }
+    else {
+      favs.push({
+        name: state.name || 'Unnamed site', lat: +state.lat.toFixed(7), lon: +state.lon.toFixed(7),
+        elev: state.elev != null ? Math.round(state.elev) : null, elevSource: state.elevSource || '',
+        bortle: state.lp && !state.lp.outOfBounds ? state.lp.bortle : null, saved: new Date().toISOString(),
+      });
+      toast(`Saved “${state.name || 'Unnamed site'}”`);
+    }
+    saveFavs(); updateFavStar(); renderFavs();
+  });
+
+  const favsBtn = $('#favsBtn'), favsPop = $('#favsPop');
+  favsBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const open = favsPop.hidden;
+    favsPop.hidden = !open;
+    favsBtn.setAttribute('aria-expanded', open);
+    if (open) renderFavs();
+  });
+  document.addEventListener('click', (e) => { if (!favsPop.hidden && !e.target.closest('.favs-wrap')) { favsPop.hidden = true; favsBtn.setAttribute('aria-expanded', false); } });
+  $('#favsList').addEventListener('click', (e) => {
+    const rm = e.target.closest('[data-rm]');
+    if (rm) {
+      const f = favs[+rm.dataset.rm];
+      favs.splice(+rm.dataset.rm, 1); saveFavs(); renderFavs(); updateFavStar();
+      toast(`Removed “${f.name || 'site'}”`);
+      return;
+    }
+    const go = e.target.closest('.go');
+    if (!go) return;
+    const f = favs[+go.dataset.i];
+    favsPop.hidden = true;
+    setLocation(f.lat, f.lon, {
+      name: f.name, zoom: 12,
+      elev: /GPS/.test(f.elevSource || '') ? f.elev : null, elevSource: f.elevSource,
+    });
+  });
+  $('#favDownload').addEventListener('click', () => {
+    if (!favs.length) { toast('Nothing to download yet'); return; }
+    const data = { app: 'Astro Planner', format: 1, exported: new Date().toISOString(), locations: favs };
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
+    a.download = `astro-planner-saved-locations-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  });
+  $('#favUpload').addEventListener('click', () => $('#favFile').click());
+  $('#favFile').addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      const data = JSON.parse(await file.text());
+      const list = Array.isArray(data) ? data : data.locations;
+      if (!Array.isArray(list)) throw new Error('no locations list found');
+      let added = 0, skipped = 0;
+      list.forEach((f) => {
+        const lat = parseFloat(f.lat ?? f.latitude), lon = parseFloat(f.lon ?? f.longitude);
+        if (!isFinite(lat) || !isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) { skipped++; return; }
+        const item = {
+          name: String(f.name || 'Unnamed site').slice(0, 120), lat, lon,
+          elev: isFinite(parseFloat(f.elev ?? f.elevation_m)) ? parseFloat(f.elev ?? f.elevation_m) : null,
+          elevSource: String(f.elevSource || ''), bortle: f.bortle ? String(f.bortle).slice(0, 4) : null, saved: f.saved || new Date().toISOString(),
+        };
+        if (favs.some((x) => sameSpot(x, item))) { skipped++; return; }
+        favs.push(item); added++;
+      });
+      saveFavs(); renderFavs(); updateFavStar();
+      toast(`Imported ${added} location${added === 1 ? '' : 's'}${skipped ? ` · ${skipped} skipped (duplicates or invalid)` : ''}`);
+    } catch (err) {
+      toast(`Couldn't import: ${err.message}`);
+    }
+  });
+
+  /* ---------------- Settings backup: everything the browser remembers ---------------- */
+  const CFG_PREFIX = 'astrosite.';
+  const cfgBtn = $('#cfgBtn'), cfgPop = $('#cfgPop');
+  cfgBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const open = cfgPop.hidden;
+    cfgPop.hidden = !open;
+    cfgBtn.setAttribute('aria-expanded', open);
+    if (open) {
+      const n = Object.keys(localStorage).filter((k) => k.startsWith(CFG_PREFIX)).length;
+      $('#cfgCount').textContent = `${n} stored`;
+    }
+  });
+  document.addEventListener('click', (e) => { if (!cfgPop.hidden && !e.target.closest('.cfg-wrap')) { cfgPop.hidden = true; cfgBtn.setAttribute('aria-expanded', false); } });
+  $('#cfgExport').addEventListener('click', () => {
+    const settings = {};
+    Object.keys(localStorage).filter((k) => k.startsWith(CFG_PREFIX)).sort().forEach((k) => { settings[k.slice(CFG_PREFIX.length)] = localStorage.getItem(k); });
+    const data = { app: 'Astro Planner', kind: 'config', format: 1, exported: new Date().toISOString(), settings };
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
+    a.download = `astro-planner-config-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  });
+  $('#cfgImport').addEventListener('click', () => $('#cfgFile').click());
+  $('#cfgFile').addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      const data = JSON.parse(await file.text());
+      if (!data || !/^Astro ?(Site|Planner)$/.test(data.app || '') || typeof data.settings !== 'object' || !data.settings) throw new Error('not an Astro Planner config file');
+      let n = 0;
+      Object.entries(data.settings).forEach(([k, v]) => {
+        if (!/^[\w.-]{1,40}$/.test(k) || typeof v !== 'string' || v.length > 500000) return;
+        localStorage.setItem(CFG_PREFIX + k, v); n++;
+      });
+      toast(`Restored ${n} settings — reloading…`);
+      setTimeout(() => { history.replaceState(null, '', location.pathname); location.reload(); }, 700);
+    } catch (err) {
+      toast(`Couldn't import config: ${err.message}`);
+    }
+  });
+  $('#cfgReset').addEventListener('click', () => {
+    const b = $('#cfgReset');
+    if (!b.dataset.armed) {
+      b.dataset.armed = '1'; b.textContent = 'Click again to confirm';
+      setTimeout(() => { delete b.dataset.armed; b.textContent = 'Reset all settings'; }, 3000);
+      return;
+    }
+    Object.keys(localStorage).filter((k) => k.startsWith(CFG_PREFIX)).forEach((k) => localStorage.removeItem(k));
+    history.replaceState(null, '', location.pathname); location.reload();
+  });
+
   /* ---------------- Export ---------------- */
   function exportRows() {
     const rows = [];
     byType().forEach((g) => g.rows.forEach((r) => {
       if (r.snip) return;
-      rows.push([g.title, r.k + (r.sub ? ` (${r.sub})` : '') + (r.progs.length ? ` [${r.progs.join(', ')}]` : ''), r.lv ? live[r.lv]() : r.v]);
+      rows.push([g.title, r.k + (r.sub ? ` (${r.sub})` : ''), r.lv ? live[r.lv]() : r.v]);
     }));
     return rows;
   }
@@ -1184,14 +1494,13 @@
       const p = new URLSearchParams();
       p.set('lat', state.lat.toFixed(6));
       p.set('lon', state.lon.toFixed(6));
-      if (state.elevSource === 'manual entry' && state.elev != null) p.set('elev', Math.round(state.elev));
       if (state.name) p.set('name', state.name);
       p.set('z', map.getZoom());
       history.replaceState(null, '', `#${p.toString()}`);
       try {
         localStorage.setItem('astrosite.last', JSON.stringify({
           lat: state.lat, lon: state.lon, name: state.name, sub: state.sub, z: map.getZoom(),
-          elev: state.elevSource === 'manual entry' || /GPS/.test(state.elevSource) ? state.elev : null,
+          elev: /GPS/.test(state.elevSource) ? state.elev : null,
           elevSource: state.elevSource,
         }));
       } catch (e) { /* storage unavailable */ }
@@ -1201,32 +1510,90 @@
     const p = new URLSearchParams(location.hash.slice(1));
     const lat = parseFloat(p.get('lat')), lon = parseFloat(p.get('lon'));
     if (!isFinite(lat) || !isFinite(lon)) return false;
-    const elev = parseFloat(p.get('elev'));
     setLocation(lat, lon, {
       zoom: parseInt(p.get('z'), 10) || 11,
       name: p.get('name') || '',
-      elev: isFinite(elev) ? elev : null,
-      elevSource: 'manual entry',
     });
     return true;
   }
   map.on('zoomend', updateHash);
 
   /* ---------------- Tabs, night mode ---------------- */
+  /* ---------------- Transitions ---------------- */
+  function animateIn(el) {
+    if (!el) return;
+    el.classList.remove('anim-in');
+    void el.offsetWidth; // restart the animation
+    el.classList.add('anim-in');
+  }
+  function moveInk() {
+    const active = $('.tab.active');
+    const ink = $('.tab-ink');
+    if (!active || !ink) return;
+    ink.style.transform = `translateX(${active.offsetLeft}px)`;
+    ink.style.width = `${active.offsetWidth}px`;
+  }
+
   $$('.tab').forEach((t) => t.addEventListener('click', () => {
+    if (t.classList.contains('active')) return;
     $$('.tab').forEach((x) => { x.classList.toggle('active', x === t); x.setAttribute('aria-selected', x === t); });
     $$('.tab-body').forEach((b) => { b.hidden = b.id !== `tab-${t.dataset.tab}`; });
-    document.body.classList.toggle('fc-wide', t.dataset.tab === 'tonight');
     if (t.dataset.tab === 'tonight') renderTonight();
-    setTimeout(() => map.invalidateSize(), 50);
+    animateIn($(`#tab-${t.dataset.tab}`));
+    moveInk();
   }));
+  requestAnimationFrame(moveInk);
+
+  /* ---------------- Resizable sidebar (width remembered) ---------------- */
+  const PANEL_DEFAULT = 600, PANEL_MIN = 360;
+  const panelMax = () => Math.max(PANEL_MIN, window.innerWidth - 320);
+  let invalidateTimer;
+  function setPanelWidth(w, save) {
+    w = Math.round(Math.max(PANEL_MIN, Math.min(panelMax(), w)));
+    document.documentElement.style.setProperty('--panel-w', `${w}px`);
+    clearTimeout(invalidateTimer);
+    invalidateTimer = setTimeout(() => { map.invalidateSize(); moveInk(); }, 60);
+    if (save) { try { localStorage.setItem('astrosite.panelw', w); } catch (e) { /* ignore */ } }
+    return w;
+  }
+  try { const w = parseInt(localStorage.getItem('astrosite.panelw'), 10); if (w) setPanelWidth(w, false); } catch (e) { /* ignore */ }
+  const resizer = $('#resizer');
+  resizer.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    resizer.setPointerCapture(e.pointerId);
+    document.body.classList.add('resizing');
+    const move = (ev) => setPanelWidth(window.innerWidth - ev.clientX, false);
+    const up = (ev) => {
+      setPanelWidth(window.innerWidth - ev.clientX, true);
+      document.body.classList.remove('resizing');
+      resizer.removeEventListener('pointermove', move);
+      resizer.removeEventListener('pointerup', up);
+      resizer.removeEventListener('pointercancel', up);
+    };
+    resizer.addEventListener('pointermove', move);
+    resizer.addEventListener('pointerup', up);
+    resizer.addEventListener('pointercancel', up);
+  });
+  resizer.addEventListener('dblclick', () => { setPanelWidth(PANEL_DEFAULT, true); toast('Sidebar width reset'); });
+  resizer.addEventListener('keydown', (e) => {
+    const cur = $('#panel').offsetWidth;
+    if (e.key === 'ArrowLeft') { e.preventDefault(); setPanelWidth(cur + 24, true); }
+    if (e.key === 'ArrowRight') { e.preventDefault(); setPanelWidth(cur - 24, true); }
+  });
+  window.addEventListener('resize', () => { moveInk(); const cur = $('#panel').offsetWidth; if (cur > panelMax()) setPanelWidth(panelMax(), false); });
 
   function setNight(on) {
+    const changed = document.body.classList.contains('night') !== on;
     document.body.classList.toggle('night', on);
-    $('#nightBtn').setAttribute('aria-pressed', on);
+    if (changed && state.fc && !$('#tab-tonight').hidden) {
+      const sc = $('.fc-scroll'); const sl = sc ? sc.scrollLeft : 0;
+      renderTonight();
+      if ($('.fc-scroll')) $('.fc-scroll').scrollLeft = sl;
+    }
+    $$('#schemeSeg button').forEach((b) => b.classList.toggle('on', (b.dataset.scheme === 'night') === on));
     try { localStorage.setItem('astrosite.night', on ? '1' : '0'); } catch (e) { /* ignore */ }
   }
-  $('#nightBtn').addEventListener('click', () => setNight(!document.body.classList.contains('night')));
+  $$('#schemeSeg button').forEach((b) => b.addEventListener('click', () => setNight(b.dataset.scheme === 'night')));
   try { if (localStorage.getItem('astrosite.night') === '1') setNight(true); } catch (e) { /* ignore */ }
 
   /* ---------------- Render orchestration ---------------- */
@@ -1254,12 +1621,15 @@
       if (!s || !isFinite(s.lat) || !isFinite(s.lon)) return false;
       setLocation(s.lat, s.lon, {
         zoom: s.z || 11, name: s.name || '', sub: s.sub || '',
-        elev: s.elev != null && isFinite(s.elev) ? s.elev : null, elevSource: s.elevSource || 'manual entry',
+        elev: s.elev != null && isFinite(s.elev) && /GPS/.test(s.elevSource || '') ? s.elev : null, elevSource: s.elevSource,
       });
       return true;
     } catch (e) { return false; }
   }
-  try { if (localStorage.getItem('astrosite.units') === 'imperial') state.units = 'imperial'; } catch (e) { /* ignore */ }
+  try {
+    if (localStorage.getItem('astrosite.units') === 'imperial') state.units = 'imperial';
+    if (localStorage.getItem('astrosite.fcvals') === '0') state.showVals = false;
+  } catch (e) { /* ignore */ }
 
   renderAll();
   if (!readHash() && !restoreLast()) {
