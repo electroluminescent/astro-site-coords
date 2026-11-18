@@ -1,7 +1,8 @@
 /* Astro Planner — Open-Meteo access layer: endpoint selection, call-weight accounting, caching and back-off.
  *
- * Free Open-Meteo limits apply per IP (600/min, 5,000/hour, 10,000/day). A request counts as more than one call
- * when it covers several locations (one per location), more than 10 variables, or more than 7 days.
+ * Free Open-Meteo limits apply per IP (600/min, 5,000/hour, 10,000/day). One location with up to 10 variables over
+ * up to 14 days is one call; more variables or days count fractionally more, and every location counts separately.
+ * Requests are paced so this browser stays well inside the per-minute and hourly limits.
  * MIT License.
  */
 (function (root) {
@@ -27,9 +28,22 @@
     return { url: host, key: k };
   }
 
-  // Estimated call weight (Open-Meteo counts fractional calls per location for >10 variables or >7 days)
+  // Estimated call weight (Open-Meteo: 1 call per location for ≤10 variables over ≤14 days, fractional beyond)
   function weight(locations, nVars, days) {
-    return locations * Math.max(1, nVars / 10) * Math.max(1, days / 7);
+    return locations * Math.max(1, nVars / 10) * Math.max(1, days / 14);
+  }
+  // Self-imposed budgets, below Open-Meteo's free limits (other devices on the same IP share those)
+  const MINUTE_BUDGET = 400, HOUR_BUDGET = 4000;
+  const recent = []; // [time, weight] of requests sent in the last minute (this tab)
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  async function pace(w) {
+    for (;;) {
+      const now = Date.now();
+      while (recent.length && now - recent[0][0] > 60000) recent.shift();
+      const used = recent.reduce((a, x) => a + x[1], 0);
+      if (!recent.length || used + w <= MINUTE_BUDGET) { recent.push([now, w]); return; }
+      await sleep(Math.max(500, 60000 - (now - recent[0][0]) + 200));
+    }
   }
 
   function hourBucket() { return Math.floor(Date.now() / 3600000); }
@@ -67,6 +81,10 @@
 
   async function request(kind, params, meta) {
     if (limited()) throw new LimitError(cooldownUntil, 'cooling down');
+    const w = weight(meta.locations || 1, meta.vars || 1, meta.days || 1);
+    if (!apiKey() && usage().hour + w > HOUR_BUDGET) { setCooldown('hourly budget'); throw new LimitError(cooldownUntil, 'hourly budget'); }
+    if (!apiKey()) await pace(w);
+    if (limited()) throw new LimitError(cooldownUntil, 'cooling down');
     const { url, key } = base(kind);
     const full = `${url}?${params}${key ? `&apikey=${encodeURIComponent(key)}` : ''}`;
     let res;
@@ -76,7 +94,7 @@
     const reason = body && (body.reason || body.error_message) ? String(body.reason || body.error_message) : '';
     if (res.status === 429 || /limit/i.test(reason)) { setCooldown(reason || 'hourly'); throw new LimitError(cooldownUntil, reason); }
     if (!res.ok || (body && body.error)) throw new Error(reason || `HTTP ${res.status}`);
-    addUsage(weight(meta.locations || 1, meta.vars || 1, meta.days || 1));
+    addUsage(w);
     return body;
   }
 
@@ -117,7 +135,7 @@
   }
 
   const api = {
-    request, weight, usage, cached, cacheGet, cacheSet, limited,
+    request, weight, usage, MINUTE_BUDGET, HOUR_BUDGET, cached, cacheGet, cacheSet, limited,
     cooldownUntil: () => cooldownUntil,
     onLimit: (fn) => { onLimit = fn; },
     apiKey, setApiKey: (k) => { try { if (k) LS.setItem(KEY_STORE, k.trim()); else LS.removeItem(KEY_STORE); } catch (e) { /* ignore */ } },

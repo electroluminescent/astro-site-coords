@@ -13,7 +13,10 @@ latitude / longitude / elevation format that astrophotography software asks for 
   - **Light pollution** (David Lorenz atlas 2025);
   - **Forecast layers** — cloud cover, low/mid/high cloud, transparency, seeing, mist/fog, wind, gusts, temperature, dew point and humidity;
     any combination can be on. They're sampled on a grid across the view and follow the hour selected in the Night forecast
-    (◀ ▶ on the map caption). **Cloud cover at the current hour shows live satellite infrared** (NASA GIBS: GOES-East/West, Himawari).
+    (◀ ▶ on the map caption). **Cloud cover at the current hour comes from live satellite infrared** (NASA GIBS: GOES-East/West,
+    Himawari; each pixel from the satellite with the best view), decoded to brightness temperature and converted to cloud fraction
+    against the forecast 2 m temperature (≈3 °C colder = clear, ≈20 °C colder = overcast), drawn in the same colours as the forecast layer.
+    Low cloud or fog close to surface temperature can read as clear at night.
     Missing values are drawn red; a layer's button turns red when it has no data at all for the view and hour.
     In High quality, changing the hour animates each layer through every intermediate hour.
 - **Home** tab — every saved location with a **next 24 h** gradient (hour ticks) and a **next 14 nights** gradient (day ticks)
@@ -44,9 +47,11 @@ latitude / longitude / elevation format that astrophotography software asks for 
 - Layout: full-height sidebar with its tabs at the top; the header spans the map only and drops items by priority as it narrows
   (badge text → site coordinates → brand name). Resizable sidebar (width remembered), eased transitions and animated expand/collapse
   throughout, last site remembered.
-- **Open-Meteo usage** — all requests are cached (forecast points on a fixed lattice, per variable, in day-aligned windows) so panning,
-  stepping hours and reloads re-use data; only the variables of active layers are fetched. On a rate-limit reply the app stops requesting
-  until the limit resets and keeps showing cached data. An estimate of today's usage is shown on the Home tab, with an optional
+- **Open-Meteo usage** — all requests are cached (forecast points on a fixed lattice of at most ~120 points per view and no finer than
+  0.1°, per variable, in 7-day windows; aerosol on a shared 0.4° grid) so panning, stepping hours and reloads re-use data; only the
+  variables of active layers are fetched. Requests are paced to stay under 400 calls/minute and 4,000/hour from this browser (below the
+  free limits, which are shared by every device on the same IP). On a rate-limit reply the app stops requesting until the limit resets
+  and keeps showing cached data. An estimate of today's usage is shown on the Home tab, with an optional
   commercial API key field (uses `customer-api.open-meteo.com`).
 
 ## Conventions

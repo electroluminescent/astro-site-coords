@@ -17,7 +17,7 @@
     'wind_speed_300hPa', 'wind_direction_300hPa', 'wind_speed_200hPa'];
   const SM = window.SkyModel;
   const OM = window.OpenMeteo;
-  const APP_VERSION = '1.7.0';
+  const APP_VERSION = '1.8.0';
 
   const state = {
     lat: null, lon: null,
@@ -2035,11 +2035,199 @@
     return d.toISOString().slice(0, 17) + '00Z';
   };
   const SAT_URL = 'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/{layer}/default/{time}/GoogleMapsCompatible_Level6/{z}/{y}/{x}.png';
-  const satLayers = ['Himawari_AHI_Band13_Clean_Infrared', 'GOES-West_ABI_Band13_Clean_Infrared', 'GOES-East_ABI_Band13_Clean_Infrared']
-    .map((layer) => L.tileLayer(SAT_URL, { layer, time: satTime(), pane: 'satPane', maxNativeZoom: 6, maxZoom: 19, opacity: 0.75, crossOrigin: true,
-      attribution: 'Satellite IR: <a href="https://earthdata.nasa.gov/gibs" target="_blank" rel="noopener">NASA GIBS</a> (NOAA GOES, JMA Himawari)' }));
-  const satGroup = L.layerGroup(satLayers);
-  setInterval(() => { if (map.hasLayer(satGroup)) { const t = satTime(); satLayers.forEach((l) => { l.options.time = t; l.redraw(); }); } }, 10 * 60000);
+  // Geostationary IR sources and their sub-satellite longitudes (each pixel uses the satellite with the best view)
+  const SAT_SRC = [
+    { layer: 'GOES-East_ABI_Band13_Clean_Infrared', lon: -75.2 },
+    { layer: 'GOES-West_ABI_Band13_Clean_Infrared', lon: -137.2 },
+    { layer: 'Himawari_AHI_Band13_Clean_Infrared', lon: 140.7 },
+  ];
+  const lonDist = (a, b) => Math.abs(A.mod(a - b + 180, 360) - 180);
+
+  // GIBS "Clean Longwave Infrared Window Band" palette → brightness temperature (°C), from the layer's colormap
+  const IR_PAL = (() => {
+    const P = [[255, 255, 255, -91.6]];
+    for (let i = 0; i < 11; i++) P.push([Math.round(127 + 12.8 * i), Math.round(12.7 * i), Math.round(127 + 7.6 * i), -90.6 + i]);
+    [230, 204, 177, 155, 129, 102, 76, 54, 27, 5].forEach((v, i) => P.push([v, v, v, -79.6 + i]));
+    for (let i = 0; i < 10; i++) P.push([Math.round(25.5 * (i + 1)), 0, 0, -69.6 + i]);
+    for (let i = 0; i < 10; i++) P.push([255, Math.round(25.5 * (i + 1)), 0, -59.6 + i]);
+    for (let i = 0; i < 10; i++) P.push([Math.round(255 - 25.5 * (i + 1)), 255, 0, -49.6 + i]);
+    [[234, 10], [212, 19], [191, 29], [170, 38], [149, 48], [128, 58], [106, 67], [85, 77], [64, 86]].forEach(([g, b], i) => P.push([0, g, b, -39.6 + i]));
+    [[42, 96], [21, 105], [0, 115], [0, 125]].forEach(([g, b], i) => P.push([0, g, b, -30.85 + 0.5 * i]));
+    for (let i = 0; i < 20; i++) P.push([0, Math.round(12.75 * (i + 1)), Math.round(122 + 7 * i), -28.85 + 0.5 * i]);
+    return P;
+  })();
+  const COLD_GREY = new Map([230, 204, 177, 155, 129, 102, 76, 54, 27, 5].map((v, i) => [v, -79.6 + i]));
+  const warmGrey = (g) => -18.85 + ((197 - g) / 1.2895) * 0.5;
+  // The palette reuses ten grey levels for −80…−70 °C cloud tops. A pixel with one of those greys is read as cold only when
+  // its surroundings look like a cold-top pattern (colours, other cold greys) and not like a smooth warm-grey ramp.
+  function greyIsCold(d, x, y, g) {
+    let coldHint = false;
+    for (let dy = -2; dy <= 2; dy++) {
+      const yy = y + dy; if (yy < 0 || yy > 255) continue;
+      for (let dx = -2; dx <= 2; dx++) {
+        const xx = x + dx; if ((!dx && !dy) || xx < 0 || xx > 255) continue;
+        const o = (yy * 256 + xx) * 4; if (d[o + 3] <= 128) continue;
+        const r = d[o], gg = d[o + 1], b = d[o + 2];
+        if (r !== gg || gg !== b) { coldHint = true; continue; }
+        const diff = Math.abs(gg - g);
+        if (diff >= 1 && diff <= 3 && Math.abs(dx) <= 1 && Math.abs(dy) <= 1) return false; // warm ramp neighbour
+        if (gg > 197 || (diff > 3 && COLD_GREY.has(gg))) coldHint = true;
+      }
+    }
+    return coldHint;
+  }
+  const irMemo = new Map();
+  function irTemp(r, g, b) {
+    if (r === g && g === b && g <= 197) return COLD_GREY.has(g) ? COLD_GREY.get(g) : warmGrey(g); // warm grey ramp
+    const key = (r << 16) | (g << 8) | b;
+    let t = irMemo.get(key);
+    if (t === undefined) {
+      // resampled overview tiles contain blended colours: take the nearest palette entry (or the grey ramp)
+      let best = Infinity;
+      const m = (r + g + b) / 3, dg = (r - m) ** 2 + (g - m) ** 2 + (b - m) ** 2;
+      if (m <= 197) { best = dg; t = warmGrey(m); }
+      for (const [pr, pg, pb, pt] of IR_PAL) {
+        const d = (r - pr) ** 2 + (g - pg) ** 2 + (b - pb) ** 2;
+        if (d < best) { best = d; t = pt; }
+      }
+      irMemo.set(key, t);
+    }
+    return t;
+  }
+  // Brightness temperature → cloud fraction, relative to the surface (forecast 2 m temperature):
+  // within ~3 °C of the surface = clear; ~20 °C or more colder = overcast.
+  const irCloud = (bt, tsfc) => Math.max(0, Math.min(1, (tsfc - bt - 3) / 17));
+
+  // 2 m temperature (°C) across the forecast lattice at the current hour, for the satellite cloud estimate
+  function sfcTempField() {
+    const g = wx.grid;
+    if (!g) return null;
+    const ti = Math.round((floorHour(Date.now()) - g.times[0]) / 3600000);
+    if (ti < 0 || ti >= g.times.length) return null;
+    const key = `t2m|${ti}`;
+    g.cache = g.cache || new Map();
+    if (g.cache.has(key)) return g.cache.get(key);
+    const v = new Float32Array(g.pts.length).fill(NaN);
+    let any = false;
+    g.pts.forEach((p, k) => { const h = wxHour(p, ti); if (h && h.temp != null) { v[k] = h.temp; any = true; } });
+    const f = any ? { g, v, id: `${g.zoom}|${g.c0}|${g.r0}|${g.sp}|${ti}` } : null;
+    g.cache.set(key, f);
+    return f;
+  }
+  function sfcTempAt(f, X, Y, z) {
+    // X, Y: projected pixel coordinates at zoom z
+    const { g, v } = f, s = 2 ** (g.zoom - z);
+    const fc = Math.max(0, Math.min(g.cols - 1, (X * s) / g.sp - g.c0)), fr = Math.max(0, Math.min(g.rows - 1, (Y * s) / g.sp - g.r0));
+    const c0 = Math.floor(fc), r0 = Math.floor(fr), c1 = Math.min(g.cols - 1, c0 + 1), r1 = Math.min(g.rows - 1, r0 + 1), tx = fc - c0, ty = fr - r0;
+    let acc = 0, wsum = 0;
+    [[r0, c0, (1 - tx) * (1 - ty)], [r0, c1, tx * (1 - ty)], [r1, c0, (1 - tx) * ty], [r1, c1, tx * ty]].forEach(([r, c, w]) => {
+      const x = v[r * g.cols + c];
+      if (w > 0 && isFinite(x)) { acc += x * w; wsum += w; }
+    });
+    return wsum > 0 ? acc / wsum : NaN;
+  }
+
+  // Live satellite cloud layer: IR tiles decoded to brightness temperature, converted to cloud fraction and drawn
+  // with the same colour scale as the forecast cloud-cover layer.
+  const loadImg = (url) => new Promise((res) => {
+    const im = new Image();
+    im.crossOrigin = 'anonymous';
+    im.onload = () => res(im); im.onerror = () => res(null);
+    im.src = url;
+  });
+  const SatCloudLayer = L.GridLayer.extend({
+    options: { pane: 'satPane', maxNativeZoom: 6, maxZoom: 19, tileSize: 256, time: '', updateWhenZooming: false,
+      attribution: 'Satellite IR: <a href="https://earthdata.nasa.gov/gibs" target="_blank" rel="noopener">NASA GIBS</a> (NOAA GOES, JMA Himawari)' },
+    createTile(coords, done) {
+      const tile = document.createElement('canvas');
+      tile.width = tile.height = 256;
+      tile.className = 'sat-tile';
+      const n = 2 ** coords.z, xw = A.mod(coords.x, n);
+      const lonW = (xw / n) * 360 - 180, lonE = ((xw + 1) / n) * 360 - 180;
+      const srcs = SAT_SRC.filter((s) => lonDist((lonW + lonE) / 2, s.lon) <= 81 + (lonE - lonW) / 2);
+      Promise.all(srcs.map((s) => loadImg(L.Util.template(SAT_URL, { layer: s.layer, time: this.options.time, z: coords.z, x: xw, y: coords.y })))).then((imgs) => {
+        const N = 256 * 256, bt = new Float32Array(N).fill(NaN);
+        const cv = document.createElement('canvas'); cv.width = cv.height = 256;
+        const cx = cv.getContext('2d', { willReadFrequently: true });
+        const px = imgs.map((im) => { if (!im) return null; cx.clearRect(0, 0, 256, 256); cx.drawImage(im, 0, 0, 256, 256); try { return cx.getImageData(0, 0, 256, 256).data; } catch (e) { return null; } });
+        // per column: sources ordered by viewing angle (nearest sub-satellite longitude first)
+        for (let x = 0; x < 256; x++) {
+          const lon = lonW + ((x + 0.5) / 256) * (lonE - lonW);
+          const order = srcs.map((s, i) => [lonDist(lon, s.lon), i]).sort((a, b) => a[0] - b[0]).map((a) => a[1]);
+          for (let y = 0; y < 256; y++) {
+            const o = (y * 256 + x) * 4;
+            for (const i of order) {
+              const d = px[i];
+              if (d && d[o + 3] > 128) {
+                const r = d[o], g = d[o + 1], b = d[o + 2];
+                bt[y * 256 + x] = r === g && g === b && COLD_GREY.has(g) ? (greyIsCold(d, x, y, g) ? COLD_GREY.get(g) : warmGrey(g)) : irTemp(r, g, b);
+                break;
+              }
+            }
+          }
+        }
+        tile._bt = medianBT(bt);
+        tile._coords = coords;
+        tile._sig = '';
+        this._colour(tile);
+        done(null, tile);
+      });
+      return tile;
+    },
+    _colour(tile) {
+      if (!tile._bt) return;
+      const tf = sfcTempField(), smooth = smoothMap(), night = isNight();
+      const sig = `${tf ? tf.id : '-'}|${smooth}|${night}`;
+      if (tile._sig === sig) return;
+      tile._sig = sig;
+      const { x, y, z } = tile._coords;
+      const ctx = tile.getContext('2d'), img = ctx.createImageData(256, 256), d = img.data;
+      const lut = []; for (let i = 0; i <= 100; i++) lut.push(shadeRgb(i / 100, false));
+      const miss = shadeRgb(null, true);
+      // fallback surface temperature when no forecast is loaded: the warmest 5 % of the tile
+      let fallback = NaN;
+      if (!tf) { const s = Array.from(tile._bt).filter(isFinite).sort((a, b) => a - b); if (s.length) fallback = s[Math.floor(s.length * 0.95)]; }
+      for (let py = 0; py < 256; py += 4) {
+        for (let px = 0; px < 256; px += 4) {
+          const ts = tf ? sfcTempAt(tf, x * 256 + px + 2, y * 256 + py + 2, z) : fallback;
+          for (let yy = py; yy < py + 4; yy++) {
+            for (let xx = px; xx < px + 4; xx++) {
+              const k = yy * 256 + xx, b = tile._bt[k], o = k * 4;
+              let rgb;
+              if (!isFinite(b) || !isFinite(ts)) rgb = miss;
+              else {
+                let q = 1 - irCloud(b, ts);
+                if (!smooth) q = Math.round(q * 10) / 10;
+                rgb = lut[Math.round(q * 100)];
+              }
+              d[o] = rgb[0]; d[o + 1] = rgb[1]; d[o + 2] = rgb[2]; d[o + 3] = 255;
+            }
+          }
+        }
+      }
+      ctx.putImageData(img, 0, 0);
+    },
+    recolour() { Object.values(this._tiles || {}).forEach((t) => this._colour(t.el)); },
+  });
+  // 3×3 median of brightness temperature: removes isolated misreads from blended overview pixels
+  function medianBT(bt) {
+    const out = new Float32Array(bt.length), w = [];
+    for (let y = 0; y < 256; y++) {
+      for (let x = 0; x < 256; x++) {
+        w.length = 0;
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+          const yy = y + dy, xx = x + dx;
+          if (yy >= 0 && yy < 256 && xx >= 0 && xx < 256) { const v = bt[yy * 256 + xx]; if (isFinite(v)) w.push(v); }
+        }
+        if (!w.length || !isFinite(bt[y * 256 + x])) { out[y * 256 + x] = NaN; continue; }
+        w.sort((a, b) => a - b);
+        out[y * 256 + x] = w[w.length >> 1];
+      }
+    }
+    return out;
+  }
+  const satLayer = new SatCloudLayer({ time: satTime(), opacity: 0.75 });
+  setInterval(() => { if (map.hasLayer(satLayer)) { satLayer.options.time = satTime(); satLayer.redraw(); } }, 10 * 60000);
 
   const WX_KEYS = ['cloud', 'cloudLow', 'cloudMid', 'cloudHigh', 'trans', 'see', 'fog', 'wind', 'gust', 'temp', 'dew', 'rh'];
   const WX_NAMES = { cloud: 'Cloud cover', cloudLow: 'Low cloud', cloudMid: 'Mid cloud', cloudHigh: 'High cloud', trans: 'Transparency', see: 'Seeing', fog: 'Mist / fog', wind: 'Wind', gust: 'Gusts', temp: 'Temperature', dew: 'Dew point', rh: 'Humidity' };
@@ -2113,7 +2301,7 @@
         else {
           const st = wx.layers.get(k);
           if (st && st.overlay) st.overlay.setOpacity(o);
-          if (k === 'cloud') satLayers.forEach((l) => l.setOpacity(o));
+          if (k === 'cloud') satLayer.setOpacity(o);
         }
       }));
       div.querySelector('.wx-vals').addEventListener('change', (e) => {
@@ -2178,7 +2366,7 @@
 
   function viewCovered() {
     if (!wx.grid) return false;
-    const sp = mapQuality === 'high' ? 110 : 150;
+    const sp = latticeSp();
     if (wx.grid.zoom !== map.getZoom() || wx.grid.sp !== sp || !wx.grid.bounds.contains(map.getBounds())) return false;
     // data for all active layers must have been requested for this grid
     return wx.grid.keysSig === wx.keys.slice().sort().join(',');
@@ -2187,9 +2375,8 @@
   async function updateWx() {
     if (!wxActive()) { clearWx(); return; }
     const t = floorHour(wxTime());
-    // Cloud cover alone at the current hour needs no forecast grid (live satellite)
-    const needGrid = wx.keys.some((k) => !(k === 'cloud' && isNowHour(t)));
-    if (!needGrid || (viewCovered() && wx.grid.times.includes(t))) { renderWx(); return; }
+    // (live satellite cloud cover also uses the grid: 2 m temperature is its clear-sky reference)
+    if (viewCovered() && wx.grid.times.includes(t) && (!isNowHour(t) || wx.grid.times.includes(floorHour(Date.now())))) { renderWx(); return; }
     const id = ++wx.req;
     wx.loading = true; renderCaption();
     try {
@@ -2207,14 +2394,18 @@
 
   // Variables each map layer needs (only these are requested)
   const WX_VARS = {
-    cloud: ['cloud_cover'], cloudLow: ['cloud_cover_low'], cloudMid: ['cloud_cover_mid'], cloudHigh: ['cloud_cover_high'],
+    cloud: ['cloud_cover', 'temperature_2m'], cloudLow: ['cloud_cover_low'], cloudMid: ['cloud_cover_mid'], cloudHigh: ['cloud_cover_high'],
     trans: ['cloud_cover', 'cloud_cover_high', 'total_column_integrated_water_vapour', 'surface_pressure', 'dew_point_2m'],
     see: ['cloud_cover', 'wind_gusts_10m', 'wind_speed_850hPa', 'wind_direction_850hPa', 'wind_speed_500hPa', 'wind_direction_500hPa', 'wind_speed_300hPa', 'wind_direction_300hPa', 'wind_speed_200hPa'],
     fog: ['visibility', 'temperature_2m', 'dew_point_2m', 'wind_speed_10m'],
     wind: ['wind_speed_10m'], gust: ['wind_gusts_10m'], temp: ['temperature_2m'], dew: ['dew_point_2m', 'temperature_2m'], rh: ['relative_humidity_2m'],
   };
-  const PT_TTL = 2 * 3600000;          // model output changes every few hours
-  const WIN_HOURS = 72; // fetch 3-day windows so stepping through hours rarely refetches
+  const PT_TTL = 3 * 3600000;          // model output changes every few hours
+  // 7-day windows: Open-Meteo charges the same for up to 14 days, so stepping through the week never refetches
+  const WIN_DAYS = 7;
+  // Aerosol (CAMS, ~0.4°) is fetched once per coarse cell and shared by every lattice point inside it
+  const aqCell = (p) => `${(Math.round(p.lat / 0.4) * 0.4).toFixed(1)},${(Math.round(p.lon / 0.4) * 0.4).toFixed(1)}`;
+  const aqEntry = (k) => ptEntry(`aq${k}`);
   const ptMem = new Map();
   function ptEntry(key) {
     if (ptMem.has(key)) return ptMem.get(key);
@@ -2225,9 +2416,19 @@
   }
   function ptSave(key, e) { e.at = Date.now(); ptMem.set(key, e); OM.cacheSet(`pt.${key}`, e); }
 
+  // Lattice spacing in screen px, fixed per zoom so panning reuses points. Doubling keeps points nested across zooms.
+  // Never finer than ~0.1° (model resolution) and never more than ~120 points per view.
+  function latticeSp() {
+    let sp = mapQuality === 'high' ? 120 : 160;
+    const degPerPx = 360 / (256 * 2 ** map.getZoom());
+    while (sp * degPerPx < 0.1) sp *= 2;
+    const pb = map.getPixelBounds();
+    while (((Math.ceil(pb.max.x / sp) - Math.floor(pb.min.x / sp) + 1) * (Math.ceil(pb.max.y / sp) - Math.floor(pb.min.y / sp) + 1)) > 120) sp *= 2;
+    return sp;
+  }
   async function fetchWxGrid(t) {
     const zoom = map.getZoom();
-    const sp = mapQuality === 'high' ? 110 : 150; // lattice spacing (screen px) — fixed per zoom so panning reuses points
+    const sp = latticeSp();
     const pb = map.getPixelBounds();
     const c0 = Math.floor(pb.min.x / sp), c1 = Math.ceil(pb.max.x / sp), r0 = Math.floor(pb.min.y / sp), r1 = Math.ceil(pb.max.y / sp);
     const cols = c1 - c0 + 1, rows = r1 - r0 + 1;
@@ -2243,7 +2444,7 @@
     const bounds = L.latLngBounds(se, nw);
     // Day-aligned windows (previous day → next day, UTC) so stepping hours, panning and reloads reuse cached data
     const DAY = 86400000;
-    const start = Math.floor(t / DAY) * DAY - DAY, end = start + 3 * DAY - 3600000;
+    const start = Math.floor(t / DAY) * DAY - DAY, end = start + WIN_DAYS * DAY - 3600000;
     const times = []; for (let x = start; x <= end; x += 3600000) times.push(x);
     const need = [...new Set(wx.keys.flatMap((k) => WX_VARS[k] || []))];
     const needAq = wx.keys.includes('trans');
@@ -2260,7 +2461,7 @@
         if (!groups.has(sig)) groups.set(sig, []);
         groups.get(sig).push(p);
       }
-      if (needAq && !(covers(e) && e.aod)) aqMissing.push(p);
+      if (needAq && !covers(aqEntry(aqCell(p)))) aqMissing.push({ key: aqCell(p), lat: +aqCell(p).split(',')[0], lon: +aqCell(p).split(',')[1] });
     });
     const unique = (list) => [...new Map(list.map((p) => [p.key, p])).values()];
     const chunks = (list, n) => { const out = []; for (let i = 0; i < list.length; i += n) out.push(list.slice(i, i + n)); return out; };
@@ -2270,7 +2471,7 @@
     groups.forEach((list, sig) => chunks(unique(list), 100).forEach((ch) => jobs.push(async () => {
       const vars = sig.split(',');
       const q = `latitude=${ch.map((p) => p.lat.toFixed(3)).join(',')}&longitude=${ch.map((p) => p.lon.toFixed(3)).join(',')}&${win}&wind_speed_unit=ms&hourly=${vars.join(',')}`;
-      const res = await OM.request('forecast', q, { locations: ch.length, vars: vars.length, days: WIN_HOURS / 24 });
+      const res = await OM.request('forecast', q, { locations: ch.length, vars: vars.length, days: WIN_DAYS });
       const arr = Array.isArray(res) ? res : [res];
       ch.forEach((p, i) => {
         const H = arr[i] && arr[i].hourly;
@@ -2284,15 +2485,12 @@
     })));
     chunks(unique(aqMissing), 100).forEach((ch) => jobs.push(async () => {
       const q = `latitude=${ch.map((p) => p.lat.toFixed(3)).join(',')}&longitude=${ch.map((p) => p.lon.toFixed(3)).join(',')}&${win}&hourly=aerosol_optical_depth`;
-      const res = await OM.request('aq', q, { locations: ch.length, vars: 1, days: WIN_HOURS / 24 });
+      const res = await OM.request('aq', q, { locations: ch.length, vars: 1, days: WIN_DAYS });
       const arr = Array.isArray(res) ? res : [res];
       ch.forEach((p, i) => {
         const H = arr[i] && arr[i].hourly;
         if (!H) return;
-        let e = ptEntry(p.key);
-        if (!covers(e)) e = { start, end, vars: {}, aod: null };
-        e.aod = { start: Date.parse(`${H.time[0]}:00Z`), v: H.aerosol_optical_depth };
-        ptSave(p.key, e);
+        ptSave(`aq${p.key}`, { start, end, v: H.aerosol_optical_depth });
       });
     }));
     for (const job of jobs) {
@@ -2308,7 +2506,8 @@
     const i = Math.round((t - e.start) / 3600000);
     const V = e.vars || {};
     const g = (k) => (V[k] && i >= 0 && i < V[k].length ? V[k][i] : null);
-    const ai = e.aod ? Math.round((t - e.aod.start) / 3600000) : -1;
+    const aq = aqEntry(aqCell(p));
+    const ai = aq ? Math.round((t - aq.start) / 3600000) : -1;
     const h = {
       t: new Date(t), cloud: g('cloud_cover'), cloudLow: g('cloud_cover_low'), cloudMid: g('cloud_cover_mid'), cloudHigh: g('cloud_cover_high'),
       vis: g('visibility'), temp: g('temperature_2m'), dew: g('dew_point_2m'), rh: g('relative_humidity_2m'),
@@ -2316,7 +2515,7 @@
       pressure: g('surface_pressure'), tcwv: g('total_column_integrated_water_vapour'),
       ws850: g('wind_speed_850hPa'), wd850: g('wind_direction_850hPa'), ws500: g('wind_speed_500hPa'), wd500: g('wind_direction_500hPa'),
       ws300: g('wind_speed_300hPa'), wd300: g('wind_direction_300hPa'), ws200: g('wind_speed_200hPa'),
-      aod: e.aod && ai >= 0 && ai < e.aod.v.length ? e.aod.v[ai] : null,
+      aod: aq && ai >= 0 && ai < aq.v.length ? aq.v[ai] : null,
     };
     h.see = SM.seeing(h); h.trans = SM.transparency(h); h.fog = SM.fog(h); h.dewRisk = SM.dewRisk(h.fog.spread);
     return h;
@@ -2326,11 +2525,11 @@
     markLayer(k, false);
     const st = wx.layers.get(k);
     if (st) { cancelAnimationFrame(st.anim || 0); if (st.overlay) map.removeLayer(st.overlay); wx.layers.delete(k); }
-    if (k === 'cloud') map.removeLayer(satGroup);
+    if (k === 'cloud') map.removeLayer(satLayer);
   }
   function clearWx() {
     [...wx.layers.keys()].forEach(removeWxLayer);
-    map.removeLayer(satGroup);
+    map.removeLayer(satLayer);
     if (wx.labels) { map.removeLayer(wx.labels); wx.labels = null; }
     wxCap.hidden = true;
   }
@@ -2484,12 +2683,12 @@
     // Cloud cover at the current hour: live satellite infrared instead of the forecast
     if (k === 'cloud' && isNowHour(t)) {
       if (st0) { cancelAnimationFrame(st0.anim || 0); if (st0.overlay) map.removeLayer(st0.overlay); st0.shown = null; }
-      if (!map.hasLayer(satGroup)) { const ts = satTime(); satLayers.forEach((l) => { l.options.time = ts; l.setOpacity(opOf('cloud')); }); satGroup.addTo(map); }
+      if (!map.hasLayer(satLayer)) { satLayer.options.time = satTime(); satLayer.setOpacity(opOf('cloud')); satLayer.addTo(map); } else satLayer.recolour();
       if (isTop) drawLabels(null);
       markLayer(k, false);
       return;
     }
-    if (k === 'cloud') map.removeLayer(satGroup);
+    if (k === 'cloud') map.removeLayer(satLayer);
     if (!g) {
       if (!wx.loading) {
         // no data at all (request failed): clear any stale picture and flag the layer
