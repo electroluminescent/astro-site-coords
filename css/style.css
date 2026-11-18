@@ -264,8 +264,8 @@ h5.sec { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; colo
 .fc-scroll:focus-visible { border-color: var(--accent); }
 table.fc { border-collapse: separate; border-spacing: 0; font: 9.5px/13px var(--mono); }
 table.fc th, table.fc td { padding: 0; height: 13px; min-width: 26px; width: 26px; text-align: center; border: 0; white-space: nowrap; overflow: hidden; }
-table.fc td { cursor: pointer; transition: background-color .25s ease, color .2s ease; }
-table.fc .fc-lbl, table.fc .fc-sub { position: sticky; z-index: 3; background: var(--bg-2); text-align: left; }
+table.fc td { cursor: pointer; }
+table.fc .fc-lbl, table.fc .fc-sub { background: var(--bg-2); text-align: left; }
 table.fc .fc-lbl { left: 0; min-width: 112px; width: 112px; max-width: 112px; padding: 0 6px; font: 500 10.5px/13px var(--sans); color: var(--text); }
 table.fc .fc-lbl[colspan] { min-width: 218px; width: 218px; max-width: 218px; border-right: 1px solid var(--line); }
 table.fc .fc-sub { left: 112px; min-width: 106px; width: 106px; max-width: 106px; padding: 0 6px; font: 10px/13px var(--sans); color: var(--muted); border-right: 1px solid var(--line); text-overflow: ellipsis; }
@@ -274,7 +274,6 @@ table.fc .fc-lbl a:hover { color: var(--accent); text-decoration: underline; }
 table.fc tr.fc-group th { font: 600 10px/14px var(--sans); text-transform: uppercase; letter-spacing: .08em; color: var(--accent); height: 14px; padding-top: 3px; }
 table.fc tr.fc-group td { background: var(--bg); }
 table.fc thead th { position: relative; color: var(--muted); font-weight: 400; }
-table.fc thead th.fc-lbl { position: sticky; }
 table.fc tr.fc-days th { height: 16px; font: 600 10.5px/16px var(--sans); color: var(--text); text-align: left; padding-left: 6px; background: var(--bg-2); }
 table.fc tr.fc-days th .dl { position: sticky; left: 224px; display: inline-block; padding-right: 8px; }
 table.fc tr.fc-hours th { height: 16px; line-height: 16px; }
@@ -298,7 +297,7 @@ table.fc.novals td i { visibility: hidden; }
 }
 .fc-tip b { display: block; font-weight: 600; margin-bottom: 2px; }
 .fc-tip div { color: var(--tip-text); }
-@keyframes tipIn { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+@keyframes tipIn { from { opacity: 0; } to { opacity: 1; } }
 .fc-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 11.5px; color: var(--muted); margin: 8px 0; align-items: center; }
 .fc-legend .scale { display: inline-flex; vertical-align: -2px; margin-right: 4px; border-radius: 3px; overflow: hidden; }
 .fc-legend .scale i { width: 12px; height: 11px; display: inline-block; }
@@ -406,7 +405,6 @@ code.field { margin-left: 6px; font: 10.5px var(--mono); color: var(--tag); back
 .pcard, .vgroup { transition: opacity .2s ease; }
 #coordEdit[aria-pressed="true"], #fcEditBtn.on { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
 table.fc tr.fc-row.off td, table.fc tr.fc-row.off th { opacity: .3; }
-table.fc tr.fc-row td, table.fc tr.fc-row th { transition: opacity .2s ease; }
 table.fc input.rowchk { margin: 0 4px 0 0; width: 10px; height: 10px; vertical-align: -1px; accent-color: var(--accent); }
 .view-hint[hidden] { display: none; }
 .muted.pad { padding: 10px 0; }
@@ -551,3 +549,33 @@ table.fc tr.fc-group td { box-shadow: none; }
 .fc-sel { position: absolute; z-index: 2; pointer-events: none; border: 2px solid var(--accent-2); border-radius: 3px; box-sizing: border-box; transition: left .18s cubic-bezier(.2,.7,.2,1), height .2s ease; }
 .fc-now { position: absolute; z-index: 2; pointer-events: none; width: 2px; background: var(--accent-2); border-radius: 1px; box-shadow: 0 0 4px rgba(255,204,102,.5); }
 body.night .fc-now { box-shadow: none; }
+
+/* Firefox draws the horizontal scrollbar over the content (and its track matched the background, hiding the
+   last row): use a thin, visible scrollbar and reserve room for it below the grid in every browser. */
+.fc-scroll { padding-bottom: 12px; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+.fc-scroll::-webkit-scrollbar { height: 8px; }
+.fc-scroll::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
+.fc-scroll::-webkit-scrollbar-track { background: transparent; }
+
+/* ---------- Two-table grid (fixed labels + scrolling values) ---------- */
+.fc-wrap { display: flex; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg); overflow: hidden; }
+.fc-left { flex: none; background: var(--bg-2); border-right: 1px solid var(--line); padding-bottom: 12px; }
+.fc-wrap .fc-scroll { flex: 1; min-width: 0; border: 0; border-radius: 0; contain: paint; scroll-behavior: auto; }
+table.fc-labels th { white-space: nowrap; }
+table.fc tr.fc-days th, table.fc tr.fc-days td { height: 16px; }
+table.fc tr.fc-hours th { height: 16px; }
+table.fc tr.fc-group th, table.fc tr.fc-group td { height: 17px; padding-top: 0; line-height: 17px; vertical-align: bottom; }
+table.fc tr.fc-row th, table.fc tr.fc-row td { height: 13px; }
+table.fc-labels tr.fc-days th { background: var(--bg-2); }
+table.fc-labels .fc-lbl[colspan] { min-width: 218px; width: 218px; max-width: 218px; border-right: 0; }
+table.fc-vals tr.fc-days th .dl { position: sticky; left: 4px; }
+.fc-tip { left: 0; top: 0; will-change: transform; }
+@media (max-width: 820px) { table.fc-labels .fc-lbl[colspan] { min-width: 166px; width: 166px; max-width: 166px; } }
+
+/* ---------- Rename saved locations ---------- */
+.favs-list .ren { background: none; border: 0; color: var(--muted); font-size: 13px; padding: 0 6px; cursor: pointer; opacity: .6; transition: opacity .15s ease, color .15s ease; }
+.favs-list li:hover .ren { opacity: 1; }
+.favs-list .ren:hover { color: var(--text); }
+.favs-list li.editing { padding: 5px 6px; gap: 6px; align-items: center; background: var(--bg-3); }
+.favs-list .ren-input { flex: 1; min-width: 0; background: var(--bg); color: var(--text); border: 1px solid var(--accent); border-radius: 5px; padding: 5px 8px; font: inherit; outline: none; }
+.favs-list .ren-ok { background: var(--accent); color: var(--on-accent); border: 0; border-radius: 5px; padding: 4px 9px; cursor: pointer; }

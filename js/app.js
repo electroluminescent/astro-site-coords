@@ -1030,6 +1030,17 @@
   });
 
   let fcKeyHandlerBound = false;
+  let fcRowIndex = new Map();
+  function tipFor(td) {
+    const tr = td.parentElement;
+    const r = fcRowIndex.get(tr.dataset.row);
+    const h = state.fc && state.fc.hours[+td.dataset.c];
+    if (!r || !h) return null;
+    const c = r.cell(h);
+    const when = `${fmtDay(h.t)} ${fmtTime(h.t)}`;
+    if (c.nodata) return [`${r.label} · ${when}`, 'No data for this hour'];
+    return [`${r.label} · ${when}`, c.tip || c.txt || '', ...(c.lim ? ['Limited data — an input is missing or estimated'] : [])];
+  }
 
   function renderTonight() {
     const box = $('#tonight');
@@ -1059,40 +1070,47 @@
     const dayStart = new Set(dayGroups.slice(1).map((g) => g.start));
     const ds = (i) => (dayStart.has(i) ? ' ds' : '');
 
-    let html = `<table class="fc${state.showVals ? '' : ' novals'}"><thead>`;
-    html += `<tr class="fc-days"><th class="fc-lbl" colspan="2"></th>${dayGroups.map((g) => `<th colspan="${g.n}" class="fc-day${ds(g.start)}"><span class="dl">${g.n >= 3 ? esc(g.lbl) : ''}</span></th>`).join('')}</tr>`;
-    html += `<tr class="fc-hours"><th class="fc-lbl" colspan="2">Hour <span class="muted">(${esc(state.tz || 'local')})</span></th>${hours.map((h, i) => {
+    // Two tables: a fixed label table and a scrolling value table with identical row heights.
+    // (No position:sticky cells — those make horizontal scrolling slow, notably in Firefox.)
+    let lbl = '<table class="fc fc-labels"><thead>';
+    let html = `<table class="fc fc-vals${state.showVals ? '' : ' novals'}"><thead>`;
+    lbl += '<tr class="fc-days"><th colspan="2"></th></tr>';
+    html += `<tr class="fc-days">${dayGroups.map((g) => `<th colspan="${g.n}" class="fc-day${ds(g.start)}"><span class="dl">${g.n >= 3 ? esc(g.lbl) : ''}</span></th>`).join('')}</tr>`;
+    lbl += `<tr class="fc-hours"><th colspan="2" class="fc-lbl">Hour <span class="muted">(${esc(state.tz || 'local')})</span></th></tr></thead><tbody>`;
+    html += `<tr class="fc-hours">${hours.map((h, i) => {
       const dark = h.sunAlt <= -18 ? 'd4' : h.sunAlt <= -12 ? 'd3' : h.sunAlt <= -6 ? 'd2' : h.sunAlt <= 0 ? 'd1' : 'd0';
       return `<th data-c="${i}" class="${dark}${ds(i)}">${fmtHour(h.t)}</th>`;
     }).join('')}</tr></thead><tbody>`;
     let lastGroup = '';
     rows.forEach((r) => {
       if (r.group !== lastGroup) {
-        html += `<tr class="fc-group"><th class="fc-lbl" colspan="2">${esc(r.group)}</th><td colspan="${hours.length}"></td></tr>`;
+        lbl += `<tr class="fc-group"><th colspan="2" class="fc-lbl">${esc(r.group)}</th></tr>`;
+        html += `<tr class="fc-group"><td colspan="${hours.length}"></td></tr>`;
         lastGroup = r.group;
       }
       const unit = r.key === 'wind' || r.key === 'gust' ? U.windU() : r.key === 'temp' || r.key === 'dew' ? U.tempU() : r.key === 'fog' ? U.visU() : '';
       const sub = [r.sub, unit].filter(Boolean).join(' · ');
       const off = fcHidden.has(r.key);
       const chk = state.fcEdit ? `<input type="checkbox" class="rowchk" data-row="${r.key}" ${off ? '' : 'checked'} aria-label="Show ${esc(r.label)}">` : '';
-      html += `<tr class="fc-row${off ? ' off' : ''}" data-row="${r.key}"><th class="fc-lbl">${chk}<a href="${esc(r.src())}" target="_blank" rel="noopener" title="Open the data source for ${esc(r.label)} in a new tab">${esc(r.label)}</a></th><th class="fc-sub">${esc(sub)}</th>`;
+      lbl += `<tr class="fc-row${off ? ' off' : ''}" data-row="${r.key}"><th class="fc-lbl">${chk}<a href="${esc(r.src())}" target="_blank" rel="noopener" title="Open the data source for ${esc(r.label)} in a new tab">${esc(r.label)}</a></th><th class="fc-sub">${esc(sub)}</th></tr>`;
+      html += `<tr class="fc-row${off ? ' off' : ''}" data-row="${r.key}">`;
       hours.forEach((h, i) => {
         const c = r.cell(h);
-        const when = `${fmtDay(h.t)} ${fmtTime(h.t)}`;
         if (c.nodata) {
           const nd = shade(null, true);
-          html += `<td data-c="${i}" class="nd${ds(i)}" style="background:${nd.bg};color:${nd.fg}" data-tip="${esc(`${r.label} · ${when}\nNo data for this hour`)}">–</td>`;
+          html += `<td data-c="${i}" class="nd${ds(i)}" style="background:${nd.bg};color:${nd.fg}">–</td>`;
           return;
         }
         const col = shade(c.q, c.lim);
         const cls = [c.mark ? (c.warn2 ? 'mk2' : 'mk') : '', c.lim ? 'lim' : '', dayStart.has(i) ? 'ds' : ''].filter(Boolean).join(' ');
         const style = col ? ` style="background:${col.bg};color:${col.fg}"` : '';
-        const tip = `${r.label} · ${when}\n${c.tip || c.txt || ''}${c.lim ? '\nLimited data — an input is missing or estimated' : ''}`;
-        html += `<td data-c="${i}"${cls ? ` class="${cls}"` : ''}${style} data-tip="${esc(tip)}">${c.html || esc(c.txt || '')}</td>`;
+        html += `<td data-c="${i}"${cls ? ` class="${cls}"` : ''}${style}>${c.html || esc(c.txt || '')}</td>`;
       });
       html += '</tr>';
     });
+    lbl += '</tbody></table>';
     html += '</tbody></table>';
+    fcRowIndex = new Map(rows.map((r) => [r.key, r]));
 
     const tzLabel = state.tz ? `${state.tz} (${offsetString(state.utcOffset)})` : `approx. ${offsetString(siteOffsetSec())}`;
     const scaleBar = () => `<span class="scale">${[0, 0.25, 0.5, 0.75, 1].map((q) => `<i style="background:${shade(q, false).bg}"></i>`).join('')}</span>`;
@@ -1121,7 +1139,10 @@
           return `<span style="left:calc(${pct.toFixed(3)}% + ${(8 - pct * 0.16).toFixed(2)}px)"><i></i>${g.n >= 6 ? `<b>${esc(lbl)}</b>` : ''}</span>`;
         }).join('')}</div>
       </div>
-      <div class="fc-scroll" tabindex="0" aria-label="Hourly forecast grid; use arrow keys to move between hours">${html}</div>
+      <div class="fc-wrap">
+        <div class="fc-left">${lbl}</div>
+        <div class="fc-scroll" tabindex="0" aria-label="Hourly forecast grid; use arrow keys to move between hours">${html}</div>
+      </div>
 
       <div class="fc-legend">
         <span>${scaleBar()} worse → better</span>
@@ -1163,41 +1184,58 @@
       $('.fc-scroll').scrollLeft = sl;
       animateIn($('.fc-scroll'));
     });
-    scroller.addEventListener('change', (e) => {
+    $('.fc-wrap', box).addEventListener('change', (e) => {
       const cb = e.target.closest('input.rowchk');
       if (!cb) return;
       const set = loadSet('astrosite.fcHidden');
       if (cb.checked) set.delete(cb.dataset.row); else set.add(cb.dataset.row);
       saveSet('astrosite.fcHidden', set);
-      cb.closest('tr').classList.toggle('off', !cb.checked);
+      $$(`tr[data-row="${cb.dataset.row}"]`, box).forEach((tr) => tr.classList.toggle('off', !cb.checked));
       placeMarkers(state.fcSel);
     });
     $('#fcVals', box).addEventListener('change', (e) => {
       state.showVals = e.target.checked;
       try { localStorage.setItem('astrosite.fcvals', state.showVals ? '1' : '0'); } catch (err) { /* ignore */ }
-      $('table.fc', box).classList.toggle('novals', !state.showVals);
+      $('table.fc-vals', box).classList.toggle('novals', !state.showVals);
     });
     let tipEl = $('#fcTip');
     if (!tipEl) { tipEl = document.createElement('div'); tipEl.id = 'fcTip'; tipEl.className = 'fc-tip'; tipEl.hidden = true; document.body.appendChild(tipEl); }
-    const moveTip = (e) => {
-      const pad = 14;
-      let x = e.clientX + pad, y = e.clientY + pad;
-      const r = tipEl.getBoundingClientRect();
-      if (x + r.width > window.innerWidth - 8) x = e.clientX - r.width - pad;
-      if (y + r.height > window.innerHeight - 8) y = e.clientY - r.height - pad;
-      tipEl.style.left = `${x}px`; tipEl.style.top = `${y}px`;
+    let tipTd = null, tipFrame = 0, scrolling = false, scrollTimer = 0, lastXY = [0, 0], tipSize = [0, 0];
+    const hideTip = () => { if (!tipEl.hidden) tipEl.hidden = true; tipTd = null; };
+    const drawTip = () => {
+      tipFrame = 0;
+      if (scrolling || !tipTd) return;
+      const [x0, y0] = lastXY, pad = 14;
+      let x = x0 + pad, y = y0 + pad;
+      if (x + tipSize[0] > window.innerWidth - 8) x = x0 - tipSize[0] - pad;
+      if (y + tipSize[1] > window.innerHeight - 8) y = y0 - tipSize[1] - pad;
+      tipEl.style.transform = `translate(${x}px, ${y}px)`;
     };
     scroller.addEventListener('mouseover', (e) => {
-      const td = e.target.closest('td[data-tip]');
-      if (!td) { tipEl.hidden = true; return; }
-      const [head, ...rest] = td.dataset.tip.split('\n');
-      tipEl.innerHTML = `<b>${esc(head)}</b>${rest.map((l) => `<div>${esc(l)}</div>`).join('')}`;
-      tipEl.hidden = false;
-      moveTip(e);
+      if (scrolling) return;
+      const td = e.target.closest('td[data-c]');
+      if (!td) { hideTip(); return; }
+      if (td === tipTd) return;
+      const lines = tipFor(td);
+      if (!lines) { hideTip(); return; }
+      tipTd = td;
+      tipEl.innerHTML = `<b>${esc(lines[0])}</b>${lines.slice(1).map((l) => `<div>${esc(l)}</div>`).join('')}`;
+      if (tipEl.hidden) tipEl.hidden = false;
+      tipSize = [tipEl.offsetWidth, tipEl.offsetHeight];
+      lastXY = [e.clientX, e.clientY];
+      if (!tipFrame) tipFrame = requestAnimationFrame(drawTip);
     });
-    scroller.addEventListener('mousemove', (e) => { if (!tipEl.hidden) moveTip(e); });
-    scroller.addEventListener('mouseleave', () => { tipEl.hidden = true; });
-    scroller.addEventListener('scroll', () => { tipEl.hidden = true; });
+    scroller.addEventListener('mousemove', (e) => {
+      if (!tipTd) return;
+      lastXY = [e.clientX, e.clientY];
+      if (!tipFrame) tipFrame = requestAnimationFrame(drawTip);
+    }, { passive: true });
+    scroller.addEventListener('mouseleave', hideTip);
+    scroller.addEventListener('scroll', () => {
+      if (!scrolling) { scrolling = true; hideTip(); }
+      clearTimeout(scrollTimer);
+      scrollTimer = setTimeout(() => { scrolling = false; }, 120);
+    }, { passive: true });
     scroller.addEventListener('keydown', (e) => {
       const step = { ArrowRight: 1, ArrowLeft: -1, PageDown: 'next', PageUp: 'prev', Home: 'tonight' }[e.key];
       if (step == null) return;
@@ -1234,7 +1272,7 @@
     const box = $('#tonight');
     const scroller = $('.fc-scroll', box);
     if (!scroller) return;
-    const table = $('table.fc', scroller);
+    const table = $('table.fc-vals', scroller);
     const th = $(`thead tr.fc-hours [data-c="${i}"]`, table);
     const hoursRow = $('thead tr.fc-hours', table);
     if (!th || !hoursRow) return;
@@ -1267,7 +1305,7 @@
     if (scroll) {
       const scroller = $('.fc-scroll', box);
       const th = $(`thead [data-c="${i}"]`, box);
-      const lblW = $('.fc-lbl', box).offsetWidth;
+      const lblW = 0;
       if (scroller && th) {
         const colLeft = th.offsetLeft;
         const view = scroller.clientWidth - lblW;
@@ -1360,6 +1398,7 @@
     ul.innerHTML = favs.map((f, i) => `<li data-i="${i}"${state.lat != null && sameSpot(f, state) ? ' class="cur"' : ''}>
         <button class="go" data-i="${i}"><span class="fn">${esc(f.name || 'Unnamed site')}</span>
           <span class="fs">${(+f.lat).toFixed(5)}, ${(+f.lon).toFixed(5)}${f.elev != null ? ` · ${Math.round(f.elev)} m` : ''}${f.bortle ? ` · Bortle ~${esc(f.bortle)}` : ''}</span></button>
+        <button class="ren" data-ren="${i}" title="Rename" aria-label="Rename ${esc(f.name || 'site')}">✎</button>
         <button class="rm" data-rm="${i}" title="Remove" aria-label="Remove ${esc(f.name || 'site')}">×</button>
       </li>`).join('');
   }
@@ -1387,7 +1426,40 @@
     if (open) renderFavs();
   });
   document.addEventListener('click', (e) => { if (!favsPop.hidden && !e.target.closest('.favs-wrap')) { favsPop.hidden = true; favsBtn.setAttribute('aria-expanded', false); } });
+  function startRename(i) {
+    const li = $(`#favsList li[data-i="${i}"]`);
+    if (!li) return;
+    const f = favs[i];
+    li.classList.add('editing');
+    li.innerHTML = `<input class="ren-input" type="text" maxlength="120" value="${esc(f.name || '')}" aria-label="New name">
+      <button class="ren-ok" title="Save name" aria-label="Save name">✓</button>`;
+    const inp = $('.ren-input', li);
+    inp.focus(); inp.select();
+    let done = false;
+    const commit = (save) => {
+      if (done) return;
+      done = true;
+      const name = inp.value.trim();
+      if (save && name && name !== f.name) {
+        f.name = name;
+        saveFavs();
+        if (state.lat != null && sameSpot(f, state)) { state.name = name; renderHead(); renderCoords(); updateHash(); }
+        toast(`Renamed to “${name}”`);
+      }
+      renderFavs();
+    };
+    inp.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') { ev.preventDefault(); commit(true); }
+      if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); commit(false); }
+    });
+    inp.addEventListener('blur', () => setTimeout(() => commit(true), 0));
+    $('.ren-ok', li).addEventListener('mousedown', (ev) => { ev.preventDefault(); commit(true); });
+  }
+
   $('#favsList').addEventListener('click', (e) => {
+    const ren = e.target.closest('[data-ren]');
+    if (ren) { e.stopPropagation(); startRename(+ren.dataset.ren); return; }
+    if (e.target.closest('.ren-input, .ren-ok')) return;
     const rm = e.target.closest('[data-rm]');
     if (rm) {
       const f = favs[+rm.dataset.rm];
