@@ -116,14 +116,67 @@
     return 0.5 * ((2 * p1) + (-p0 + p2) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 + (-p0 + 3 * p1 - 3 * p2 + p3) * t3);
   };
 
+  /* The atlas stores integers, so dark, flat regions form 1-step terraces whose edges follow the grid and show up
+     as stair-steps once a zone boundary runs along them. Where the local range is only about one step, blend in a
+     Gaussian-smoothed estimate of the true surface; where the field changes faster (real features) keep the data. */
+  function dequantize(win, W, H) {
+    const sigma = 2.5, R = 7;
+    const k = [];
+    let ks = 0;
+    for (let i = -R; i <= R; i++) { const w = Math.exp(-(i * i) / (2 * sigma * sigma)); k.push(w); ks += w; }
+    const tmp = new Float32Array(W * H), blur = new Float32Array(W * H);
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        let sum = 0, wsum = 0;
+        for (let i = -R; i <= R; i++) {
+          const xx = x + i; if (xx < 0 || xx >= W) continue;
+          const v = win[y * W + xx]; if (!isFinite(v)) continue;
+          sum += v * k[i + R]; wsum += k[i + R];
+        }
+        tmp[y * W + x] = wsum ? sum / wsum : NaN;
+      }
+    }
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        let sum = 0, wsum = 0;
+        for (let i = -R; i <= R; i++) {
+          const yy = y + i; if (yy < 0 || yy >= H) continue;
+          const v = tmp[yy * W + x]; if (!isFinite(v)) continue;
+          sum += v * k[i + R]; wsum += k[i + R];
+        }
+        blur[y * W + x] = wsum ? sum / wsum : NaN;
+      }
+    }
+    const out = new Float32Array(W * H);
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const o = y * W + x, v = win[o];
+        if (!isFinite(v)) { out[o] = NaN; continue; }
+        let lo = v, hi = v;
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            const yy = y + dy, xx = x + dx;
+            if (yy < 0 || yy >= H || xx < 0 || xx >= W) continue;
+            const n = win[yy * W + xx]; if (!isFinite(n)) continue;
+            if (n < lo) lo = n; if (n > hi) hi = n;
+          }
+        }
+        const w = Math.max(0, Math.min(1, 1 - (hi - lo - 1) / 3)); // range ≤1 step → fully smoothed; ≥4 → raw data
+        out[o] = isFinite(blur[o]) ? v + (blur[o] - v) * w : v;
+      }
+    }
+    return out;
+  }
+
   // Render one 256-px web-mercator tile into a canvas. lonAt(px) / latAt(py) map pixel centres to degrees.
   async function renderHQ(canvas, lonAt, latAt, size = 256, smooth = false) {
     const lons = new Float64Array(size), lats = new Float64Array(size);
     for (let i = 0; i < size; i++) { lons[i] = lonAt(i + 0.5); lats[i] = latAt(i + 0.5); }
     const fx = (lon) => mod(lon + 180, 360) * 120 - 0.5;
     const fy = (lat) => (lat + 65) * 120 - 0.5;
-    let gx0 = Math.floor(Math.min(fx(lons[0]), fx(lons[size - 1]))) - 2, gx1 = Math.ceil(Math.max(fx(lons[0]), fx(lons[size - 1]))) + 2;
-    const gyA = Math.floor(fy(Math.min(lats[0], lats[size - 1]))) - 2, gyB = Math.ceil(fy(Math.max(lats[0], lats[size - 1]))) + 2;
+    const M = 9; // margin (cells) for the de-terracing filter + bicubic support
+    let gx0 = Math.floor(Math.min(fx(lons[0]), fx(lons[size - 1]))) - M, gx1 = Math.ceil(Math.max(fx(lons[0]), fx(lons[size - 1]))) + M;
+    const gyA = Math.floor(fy(Math.min(lats[0], lats[size - 1]))) - M, gyB = Math.ceil(fy(Math.max(lats[0], lats[size - 1]))) + M;
     if (gyB < 0 || gyA > 28 * 600 - 1) return false;               // outside atlas coverage
     if (gx1 - gx0 > 1500 || gyB - gyA > 1500) return false;         // too large: let the image tiles handle low zooms
     const W = gx1 - gx0 + 1, Hh = gyB - gyA + 1;
@@ -149,9 +202,10 @@
         if (arr) win[(gy - gyA) * W + (gx - gx0)] = arr[r * 600 + (gxw % 600)];
       }
     }
+    const field = dequantize(win, W, Hh);
     const at = (x, y) => {
       x = Math.max(0, Math.min(W - 1, x)); y = Math.max(0, Math.min(Hh - 1, y));
-      return win[y * W + x];
+      return field[y * W + x];
     };
     const ctx = canvas.getContext('2d');
     const img = ctx.createImageData(size, size);

@@ -16,7 +16,7 @@
     'wind_speed_850hPa', 'wind_direction_850hPa', 'wind_speed_500hPa', 'wind_direction_500hPa',
     'wind_speed_300hPa', 'wind_direction_300hPa', 'wind_speed_200hPa'];
   const SM = window.SkyModel;
-  const APP_VERSION = '1.4.0';
+  const APP_VERSION = '1.4.1';
 
   const state = {
     lat: null, lon: null,
@@ -1349,7 +1349,7 @@
       }
     }
     renderHourDetail(hours[i]);
-    if (wx.key) scheduleWx(150);
+    if (wx.key) scheduleWx(60);
     const nightBefore = lastNightKey;
     renderNightSummary(hours[i].t);
     if (lastNightKey !== nightBefore && !instant) animateIn($('#fcNight'));
@@ -2150,7 +2150,10 @@
     try {
       const grid = await fetchWxGrid(t);
       if (id !== wx.req) return;
+      const prevShown = wx.shown;
       wx.grid = grid;
+      if (prevShown != null && grid.times.includes(prevShown)) wx.shownGrid = grid; // animate from the old hour on the new grid
+      else wx.shown = null;
     } catch (err) {
       if (id === wx.req) toast(`Forecast overlay unavailable: ${err.message}`);
     } finally {
@@ -2212,6 +2215,8 @@
   }
 
   function clearWx() {
+    cancelAnimationFrame(wx.anim || 0);
+    wx.shown = null;
     if (wx.overlay) { map.removeLayer(wx.overlay); wx.overlay = null; }
     if (wx.labels) { map.removeLayer(wx.labels); wx.labels = null; }
     wxCap.hidden = true;
@@ -2237,6 +2242,107 @@
     try { return rowDefs(); } finally { [state.lat, state.lon] = saved; }
   }
 
+  // Canvas-backed image overlay: we draw frames straight into the element (no image re-encoding)
+  const CanvasOverlay = L.ImageOverlay.extend({
+    _initImage() {
+      const c = this._image = this._canvas;
+      L.DomUtil.addClass(c, 'leaflet-image-layer');
+      if (this._zoomAnimated) L.DomUtil.addClass(c, 'leaflet-zoom-animated');
+      if (this.options.className) L.DomUtil.addClass(c, this.options.className);
+      c.onselectstart = L.Util.falseFn;
+      c.onmousemove = L.Util.falseFn;
+    },
+  });
+
+  // Values for every grid point at one forecast hour (cached per layer/units/theme)
+  function wxField(ti, def) {
+    const g = wx.grid;
+    const key = `${wx.key}|${ti}|${state.units}|${isNight() ? 'n' : 'd'}`;
+    g.cache = g.cache || new Map();
+    if (g.cache.has(key)) return g.cache.get(key);
+    const n = g.pts.length;
+    const f = { q: new Float32Array(n), lim: new Uint8Array(n), nd: new Uint8Array(n), labels: [] };
+    g.pts.forEach((p, k) => {
+      const h = wxHour(p, ti);
+      const c = h ? def.cell(h) : { nodata: true };
+      if (c.nodata || c.q == null) { f.nd[k] = c.nodata ? 1 : 0; f.q[k] = 0.5; } else f.q[k] = c.q;
+      f.lim[k] = c.lim ? 1 : 0;
+      if (!c.nodata) f.labels.push({ p, html: c.html || esc(c.txt || '') });
+    });
+    g.cache.set(key, f);
+    return f;
+  }
+
+  const crs = (p0, p1, p2, p3, t) => 0.5 * ((2 * p1) + (-p0 + p2) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t * t + (-p0 + 3 * p1 - 3 * p2 + p3) * t * t * t);
+
+  // Paint a field (q / lim / nodata per grid point) into the overlay canvas
+  function paintField(cv, f) {
+    const g = wx.grid;
+    const ctx = cv.getContext('2d');
+    if (mapQuality !== 'high') {
+      const img = ctx.createImageData(g.cols, g.rows);
+      for (let k = 0; k < g.pts.length; k++) {
+        const p = g.pts[k];
+        const rgb = f.nd[k] ? shadeRgb(null, true) : shadeRgb(f.q[k], f.lim[k]);
+        const o = (p.r * g.cols + p.c) * 4;
+        img.data[o] = rgb[0]; img.data[o + 1] = rgb[1]; img.data[o + 2] = rgb[2]; img.data[o + 3] = 255;
+      }
+      ctx.putImageData(img, 0, 0);
+      return;
+    }
+    const S = 10, W = cv.width, H = cv.height;
+    const img = ctx.createImageData(W, H);
+    const qAt = (r, c) => f.q[Math.max(0, Math.min(g.rows - 1, r)) * g.cols + Math.max(0, Math.min(g.cols - 1, c))];
+    const smooth = smoothMap();
+    // colour lookup table over q (fast per-pixel colouring)
+    const LUT = 256, lutN = [], lutL = shadeRgb(null, true);
+    for (let i = 0; i < LUT; i++) lutN.push(shadeRgb(i / (LUT - 1), false));
+    for (let y = 0; y < H; y++) {
+      const fy = (y + 0.5) / S - 0.5, r1 = Math.floor(fy), ty = fy - r1;
+      for (let x = 0; x < W; x++) {
+        const fx = (x + 0.5) / S - 0.5, c1 = Math.floor(fx), tx = fx - c1;
+        const v0 = crs(qAt(r1 - 1, c1 - 1), qAt(r1 - 1, c1), qAt(r1 - 1, c1 + 1), qAt(r1 - 1, c1 + 2), tx);
+        const v1 = crs(qAt(r1, c1 - 1), qAt(r1, c1), qAt(r1, c1 + 1), qAt(r1, c1 + 2), tx);
+        const v2 = crs(qAt(r1 + 1, c1 - 1), qAt(r1 + 1, c1), qAt(r1 + 1, c1 + 1), qAt(r1 + 1, c1 + 2), tx);
+        const v3 = crs(qAt(r1 + 2, c1 - 1), qAt(r1 + 2, c1), qAt(r1 + 2, c1 + 1), qAt(r1 + 2, c1 + 2), tx);
+        let q = Math.max(0, Math.min(1, crs(v0, v1, v2, v3, ty)));
+        if (!smooth) q = Math.round(q * 10) / 10; // stepped colour bands
+        const nk = Math.max(0, Math.min(g.rows - 1, Math.round(fy))) * g.cols + Math.max(0, Math.min(g.cols - 1, Math.round(fx)));
+        const rgb = f.nd[nk] || f.lim[nk] ? lutL : lutN[Math.round(q * (LUT - 1))];
+        const o = (y * W + x) * 4;
+        img.data[o] = rgb[0]; img.data[o + 1] = rgb[1]; img.data[o + 2] = rgb[2]; img.data[o + 3] = 255;
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+  }
+
+  function ensureOverlay() {
+    const g = wx.grid;
+    const hq = mapQuality === 'high';
+    const W = hq ? g.cols * 10 : g.cols, H = hq ? g.rows * 10 : g.rows;
+    if (wx.overlay && (wx.overlay._canvas.width !== W || wx.overlay._canvas.height !== H)) { map.removeLayer(wx.overlay); wx.overlay = null; }
+    if (!wx.overlay) {
+      const cv = document.createElement('canvas');
+      cv.width = W; cv.height = H;
+      const ov = new CanvasOverlay('', g.bounds, { pane: 'wxPane', opacity: wx.opacity, className: 'wx-img', interactive: false });
+      ov._canvas = cv;
+      wx.overlay = ov.addTo(map);
+    } else {
+      wx.overlay.setBounds(g.bounds);
+      wx.overlay.setOpacity(wx.opacity);
+    }
+    return wx.overlay._canvas;
+  }
+
+  function drawLabels(f) {
+    if (wx.labels) { map.removeLayer(wx.labels); wx.labels = null; }
+    if (!wx.vals) return;
+    wx.labels = L.layerGroup(f.labels.map(({ p, html }) => L.marker([p.lat, p.lon], {
+      pane: 'wxPane', interactive: false, keyboard: false,
+      icon: L.divIcon({ className: 'wx-lbl', html: `<span>${html}</span>`, iconSize: [36, 16], iconAnchor: [18, 8] }),
+    }))).addTo(map);
+  }
+
   function renderWx() {
     if (!wx.key) { clearWx(); return; }
     renderCaption();
@@ -2246,57 +2352,42 @@
     const ti = g.times.indexOf(t);
     if (ti < 0) return;
     const def = rowDefsSafe().find((r) => r.key === wx.key);
-    const cv = document.createElement('canvas');
-    const labels = [];
-    const cells = g.pts.map((p) => {
-      const h = wxHour(p, ti);
-      const c = h ? def.cell(h) : { nodata: true };
-      if (wx.vals && !c.nodata) labels.push({ p, html: c.html || esc(c.txt || '') });
-      return c;
-    });
-    if (mapQuality === 'high') {
-      // Bicubic (Catmull-Rom) interpolation of the quality value, coloured per pixel
-      const S = 10;
-      cv.width = g.cols * S; cv.height = g.rows * S;
-      const ctx = cv.getContext('2d');
-      const qAt = (r, c) => {
-        r = Math.max(0, Math.min(g.rows - 1, r)); c = Math.max(0, Math.min(g.cols - 1, c));
-        const cell = cells[r * g.cols + c];
-        return cell.nodata || cell.q == null ? 0.5 : cell.q;
-      };
-      const crs = (p0, p1, p2, p3, t) => 0.5 * ((2 * p1) + (-p0 + p2) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t * t + (-p0 + 3 * p1 - 3 * p2 + p3) * t * t * t);
-      for (let y = 0; y < cv.height; y++) {
-        const fy = (y + 0.5) / S - 0.5, r1 = Math.floor(fy), ty = fy - r1;
-        for (let x = 0; x < cv.width; x++) {
-          const fx = (x + 0.5) / S - 0.5, c1 = Math.floor(fx), tx = fx - c1;
-          const rowv = [-1, 0, 1, 2].map((dr) => crs(qAt(r1 + dr, c1 - 1), qAt(r1 + dr, c1), qAt(r1 + dr, c1 + 1), qAt(r1 + dr, c1 + 2), tx));
-          let q = crs(rowv[0], rowv[1], rowv[2], rowv[3], ty);
-          if (!smoothMap()) q = Math.round(Math.max(0, Math.min(1, q)) * 10) / 10; // stepped colour bands
-          const near = cells[Math.max(0, Math.min(g.rows - 1, Math.round(fy))) * g.cols + Math.max(0, Math.min(g.cols - 1, Math.round(fx)))];
-          ctx.fillStyle = (near.nodata ? shade(null, true) : shade(Math.max(0, Math.min(1, q)), near.lim)).bg;
-          ctx.fillRect(x, y, 1, 1);
+    const cv = ensureOverlay();
+    cancelAnimationFrame(wx.anim || 0);
+    const from = wx.shown;
+    const fi = from != null && wx.shownGrid === g ? g.times.indexOf(from) : -1;
+    const hours = Math.abs(ti - fi);
+    if (mapQuality === 'high' && fi >= 0 && hours > 0 && hours <= 48) {
+      // Progress the field through every hour between the two times, blending between consecutive hours
+      const duration = Math.min(2400, 300 + 140 * hours);
+      const dir = ti > fi ? 1 : -1;
+      const t0 = performance.now();
+      const n = g.pts.length;
+      const mix = { q: new Float32Array(n), lim: new Uint8Array(n), nd: new Uint8Array(n), labels: [] };
+      if (wx.labels) { map.removeLayer(wx.labels); wx.labels = null; }
+      const step = (now) => {
+        const pr = Math.min(1, (now - t0) / duration);
+        const e = pr < 0.5 ? 2 * pr * pr : 1 - Math.pow(-2 * pr + 2, 2) / 2; // ease in-out
+        const pos = fi + dir * e * hours;                                   // fractional hour index
+        const a = Math.floor(pos), fr = pos - a;
+        const fa = wxField(Math.max(0, Math.min(g.times.length - 1, a)), def);
+        const fb = wxField(Math.max(0, Math.min(g.times.length - 1, a + 1)), def);
+        for (let k = 0; k < n; k++) {
+          mix.q[k] = fa.q[k] + (fb.q[k] - fa.q[k]) * fr;
+          mix.lim[k] = fr < 0.5 ? fa.lim[k] : fb.lim[k];
+          mix.nd[k] = fr < 0.5 ? fa.nd[k] : fb.nd[k];
         }
-      }
+        paintField(cv, mix);
+        if (pr < 1) wx.anim = requestAnimationFrame(step);
+        else { const f = wxField(ti, def); paintField(cv, f); drawLabels(f); }
+      };
+      wx.anim = requestAnimationFrame(step);
     } else {
-      cv.width = g.cols; cv.height = g.rows;
-      const ctx = cv.getContext('2d');
-      g.pts.forEach((p, k) => {
-        const c = cells[k];
-        const col = c.nodata ? shade(null, true) : (shade(c.q, c.lim) || shade(0.5, false));
-        ctx.fillStyle = col.bg;
-        ctx.fillRect(p.c, p.r, 1, 1);
-      });
+      const f = wxField(ti, def);
+      paintField(cv, f);
+      drawLabels(f);
     }
-    const url = cv.toDataURL();
-    if (wx.overlay) { wx.overlay.setUrl(url); wx.overlay.setBounds(g.bounds); wx.overlay.setOpacity(wx.opacity); }
-    else wx.overlay = L.imageOverlay(url, g.bounds, { pane: 'wxPane', opacity: wx.opacity, className: 'wx-img', interactive: false }).addTo(map);
-    if (wx.labels) { map.removeLayer(wx.labels); wx.labels = null; }
-    if (wx.vals) {
-      wx.labels = L.layerGroup(labels.map(({ p, html }) => L.marker([p.lat, p.lon], {
-        pane: 'wxPane', interactive: false, keyboard: false,
-        icon: L.divIcon({ className: 'wx-lbl', html: `<span>${html}</span>`, iconSize: [36, 16], iconAnchor: [18, 8] }),
-      }))).addTo(map);
-    }
+    wx.shown = t; wx.shownGrid = g;
   }
 
   /* ---------------- Render orchestration ---------------- */

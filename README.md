@@ -12,6 +12,7 @@ latitude / longitude / elevation format that astrophotography software asks for 
   - **Satellite clouds** — latest GOES-East/West and Himawari infrared from NASA GIBS (≈40 min old, refreshed every 10 min);
   - **Forecast overlay** — any forecast row (cloud, low/mid/high cloud, transparency, seeing, mist/fog, wind, gusts, temperature,
     dew point, humidity) sampled on a grid across the view, following the hour selected in the Night forecast (◀ ▶ on the map caption).
+    In High quality, changing the hour animates the field through every intermediate hour.
 - **Home** tab — every saved location with a **next 24 h** gradient (hour ticks) and a **next 14 nights** gradient (day ticks)
   combining cloud cover, transparency and seeing into one colour; click to open that hour/night. Display preferences,
   **map quality** (High = spline-interpolated light pollution beyond zoom 8 and forecast overlays) with two High-only options —
