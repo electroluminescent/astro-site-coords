@@ -1001,6 +1001,29 @@
     return { ev, mo, astroDark, moonFree, moonRise, moonSet, moonUpAll, moonDownAll, illum };
   }
 
+  /* Collapsible sections in the forecast tab (state remembered) */
+  const collapsedSecs = loadSet('astrosite.collapsed');
+  function csWrap(id, title, body) {
+    const c = collapsedSecs.has(id);
+    return `<section class="cs${c ? ' collapsed' : ''}" data-sec="${id}">
+      <h5 class="sec cs-head" tabindex="0" role="button" aria-expanded="${!c}"><span class="chev" aria-hidden="true"></span>${title}</h5>
+      <div class="cs-body"><div class="cs-inner">${body}</div></div></section>`;
+  }
+  function toggleSection(head) {
+    const sec = head.closest('.cs');
+    const id = sec.dataset.sec;
+    const nowCollapsed = !sec.classList.contains('collapsed');
+    sec.classList.toggle('collapsed', nowCollapsed);
+    head.setAttribute('aria-expanded', !nowCollapsed);
+    if (nowCollapsed) collapsedSecs.add(id); else collapsedSecs.delete(id);
+    saveSet('astrosite.collapsed', collapsedSecs);
+  }
+  $('#tonight').addEventListener('click', (e) => { const h = e.target.closest('.cs-head'); if (h) toggleSection(h); });
+  $('#tonight').addEventListener('keydown', (e) => {
+    const h = e.target.closest('.cs-head');
+    if (h && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); toggleSection(h); }
+  });
+
   let fcKeyHandlerBound = false;
 
   function renderTonight() {
@@ -1070,7 +1093,7 @@
     const tzLabel = state.tz ? `${state.tz} (${offsetString(state.utcOffset)})` : `approx. ${offsetString(siteOffsetSec())}`;
     const scaleBar = () => `<span class="scale">${[0, 0.25, 0.5, 0.75, 1].map((q) => `<i style="background:${shade(q, false).bg}"></i>`).join('')}</span>`;
 
-    box.innerHTML = `
+    const gridHtml = `
       <div class="fc-nav">
         <div class="fc-nav-btns">
           <button class="btn small" data-nav="prev" title="Previous night (Page Up)">◀ Prev night</button>
@@ -1102,6 +1125,9 @@
         <span><i class="mk-swatch"></i> fog / dew risk</span>
         <span class="muted">${esc(tzLabel)}</span>
       </div>
+`;
+    box.innerHTML = `
+      ${csWrap('grid', `Forecast · ${FC_DAYS} days`, gridHtml)}
       <div id="fcDetail"></div>
       <div id="fcNight"></div>
       <details class="fc-about">
@@ -1112,13 +1138,12 @@
         <p><b>Mist / fog</b> uses forecast visibility: under 1 km is fog, 1–5 km is mist. An orange mark means radiation fog or heavy dew is likely (temperature within 2 °C of the dew point; amber within 4 °C).</p>
         <p><b>Colours</b> are generated per value: each row converts its value to a 0–1 quality score with a fixed formula, and that score sets the lightness of a single blue (darker = better). <b>Solid red</b> marks an hour whose value is missing or relies on an estimated input, for example typical aerosol levels beyond the aerosol forecast range. Hover over any cell for its exact value; click a row label to open its data source.</p>
       </details>
-      <h5 class="sec">Open this site in</h5>
-      <div class="links">
+      ${csWrap('links', 'Open this site in', `<div class="links">
         <a href="https://clearoutside.com/forecast/${state.lat.toFixed(2)}/${state.lon.toFixed(2)}" target="_blank" rel="noopener">Clear Outside</a>
         <a href="https://www.astrospheric.com/" target="_blank" rel="noopener">Astrospheric</a>
         <a href="https://lightpollutionmap.app/?lat=${state.lat.toFixed(5)}&lng=${state.lon.toFixed(5)}" target="_blank" rel="noopener">Light Pollution Map</a>
         <a href="https://www.openstreetmap.org/?mlat=${state.lat.toFixed(6)}&mlon=${state.lon.toFixed(6)}#map=14/${state.lat.toFixed(5)}/${state.lon.toFixed(5)}" target="_blank" rel="noopener">OpenStreetMap</a>
-      </div>`;
+      </div>`)}`;
 
     const scroller = $('.fc-scroll', box);
     const slider = $('.fc-slider', box);
@@ -1251,8 +1276,8 @@
       ['Humidity / pressure', `${v(h.rh)}% · ${v(h.pressure)} hPa`],
       ['Precipitation chance', h.precip == null ? '—' : `${h.precip}%`],
     ];
-    el.innerHTML = `<h5 class="sec">${esc(fmtDay(h.t))} · ${fmtTime(h.t)}</h5>
-      <table class="vals fc-detail"><tbody>${items.map(([k, val]) => `<tr><td class="k">${esc(k)}</td><td>${val}</td></tr>`).join('')}</tbody></table>`;
+    el.innerHTML = csWrap('hour', `${esc(fmtDay(h.t))} · ${fmtTime(h.t)}`,
+      `<table class="vals fc-detail"><tbody>${items.map(([k, val]) => `<tr><td class="k">${esc(k)}</td><td>${val}</td></tr>`).join('')}</tbody></table>`);
   }
 
   let lastNightKey = null;
@@ -1267,8 +1292,7 @@
     const cell = (l, tt, sub) => `<div class="tn-cell"><div class="l">${l}</div><div class="t">${tt}</div>${sub ? `<div class="s">${sub}</div>` : ''}</div>`;
     const moonTxt = s.moonUpAll ? 'up all night' : s.moonDownAll ? 'below horizon all night'
       : [s.moonRise ? `rises ${fmtTime(s.moonRise)}` : 'up at dusk', s.moonSet ? `sets ${fmtTime(s.moonSet)}` : 'up at dawn'].join(' · ');
-    el.innerHTML = `
-      <h5 class="sec">Night of ${esc(fmtDay(noon))}</h5>
+    el.innerHTML = csWrap('night', `Night of ${esc(fmtDay(noon))}`, `
       <div class="tn-grid">
         ${cell('Sunset', fmtTime(s.ev.sunset), `Civil dusk ${fmtTime(s.ev.dusk)}`)}
         ${cell('Sunrise', fmtTime(s.mo.sunrise), `Civil dawn ${fmtTime(s.mo.dawn)}`)}
@@ -1276,7 +1300,7 @@
         ${cell('Astro dawn (−18°)', fmtTime(s.mo.nightEnd), `Nautical dawn ${fmtTime(s.mo.nauticalDawn)}`)}
         ${cell('Darkness', fmtDur(s.astroDark), isNaN(s.ev.night) ? 'No astronomical darkness' : `${fmtDur(s.moonFree)} moon-free`)}
         ${cell('Moon', `${Math.round(s.illum.fraction * 100)}%`, `${moonPhaseName(s.illum.phase)} · ${moonTxt}`)}
-      </div>`;
+      </div>`);
   }
 
   /* ---------------- Saved (favourite) locations ---------------- */

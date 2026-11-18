@@ -534,3 +534,14 @@ table.fc tr.fc-group td { box-shadow: none; }
 .fc-ticks span { position: absolute; top: 0; transform: translateX(-1px); }
 .fc-ticks i { display: block; width: 2px; height: 6px; background: var(--day-line); border-radius: 1px; opacity: .8; }
 .fc-ticks b { position: absolute; top: 6px; left: 3px; font: 500 9.5px var(--sans); color: var(--muted); white-space: nowrap; }
+
+/* ---------- Collapsible sections ---------- */
+.cs-head { display: flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; border-radius: 4px; outline: none; }
+.cs-head:hover { color: var(--text); }
+.cs-head:focus-visible { box-shadow: 0 0 0 2px var(--accent); }
+.cs-head .chev { width: 0; height: 0; border-left: 4px solid transparent; border-right: 4px solid transparent; border-top: 5px solid currentColor; transition: transform .22s cubic-bezier(.2,.7,.2,1); }
+.cs.collapsed .cs-head .chev { transform: rotate(-90deg); }
+.cs-body { display: grid; grid-template-rows: 1fr; transition: grid-template-rows .26s cubic-bezier(.2,.7,.2,1), opacity .2s ease; }
+.cs.collapsed .cs-body { grid-template-rows: 0fr; opacity: 0; }
+.cs-inner { min-height: 0; overflow: hidden; }
+.cs:first-child .cs-head { margin-top: 8px; }

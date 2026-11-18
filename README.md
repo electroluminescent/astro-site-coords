@@ -23,7 +23,7 @@ latitude / longitude / elevation format that astrophotography software asks for 
   moon illumination, total/low/mid/high cloud, transparency, seeing, mist/fog, wind speed, direction, gusts, temperature, dew point, humidity).
   Blue scale (darker = better); **solid red** = value missing or based on an estimated input. Hover any cell for its value; click a row label
   to open that row's data source. Show/hide values, **Edit rows** to choose rows, day dividers, timeline slider with day ticks, ←/→ and
-  PgUp/PgDn, Prev / Tonight / Next night.
+  PgUp/PgDn, Prev / Tonight / Next night. Every section of the tab collapses (remembered).
 - **Saved locations** — star a site, jump between saved sites, download the list and import it again.
 - **Settings backup** (⚙) — export every remembered setting (saved locations, pins, hidden rows/programs/groups, units, view, colour
   scheme, sidebar width, map layers) to a JSON file and import it to restore; reset all.
