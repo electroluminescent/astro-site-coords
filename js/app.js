@@ -1067,7 +1067,6 @@
     });
     html += '</tbody></table>';
 
-    const firstLimitedTrans = hours.findIndex((h) => h.trans && h.trans.aodEst);
     const tzLabel = state.tz ? `${state.tz} (${offsetString(state.utcOffset)})` : `approx. ${offsetString(siteOffsetSec())}`;
     const scaleBar = () => `<span class="scale">${[0, 0.25, 0.5, 0.75, 1].map((q) => `<i style="background:${shade(q, false).bg}"></i>`).join('')}</span>`;
 
@@ -1103,7 +1102,6 @@
         <span><i class="mk-swatch"></i> fog / dew risk</span>
         <span class="muted">${esc(tzLabel)}</span>
       </div>
-      ${firstLimitedTrans > 0 ? `<p class="fc-note">Aerosol (smoke / haze) forecasts end ${esc(fmtDay(hours[firstLimitedTrans].t))} ${fmtTime(hours[firstLimitedTrans].t)}; after that, transparency assumes typical clean air and is shown in red.</p>` : ''}
       <div id="fcDetail"></div>
       <div id="fcNight"></div>
       <details class="fc-about">
