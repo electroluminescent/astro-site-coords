@@ -488,12 +488,13 @@ body.night table.fc td.lim, body.night table.fc td.nd {
 }
 body.night .fc-legend .red-swatch { background-image: repeating-linear-gradient(135deg, rgba(0,0,0,.55) 0 2px, transparent 2px 5px); }
 
-/* ---------- Logo: imaging train (dew shield · OTA · focuser · rotator · OAG + guide cam · filter wheel · camera) ---------- */
-.brand svg.logo { width: 52px; height: 26px; flex: none; fill: none; stroke: var(--accent); stroke-width: 1.5; stroke-linejoin: round; }
-.brand svg.logo .t-fw { fill: var(--accent); fill-opacity: .25; }
-.brand svg.logo .t-cam { fill: var(--accent-2); stroke: var(--accent-2); }
-.brand svg.logo .t-fan { stroke: var(--bg-2); }
-.brand svg.logo .t-gcam { fill: var(--accent); fill-opacity: .35; }
+/* ---------- Logo: astro camera, face-on ---------- */
+.brand svg.logo { width: 28px; height: 28px; flex: none; }
+.brand svg.logo .c-body { fill: var(--bg-3); stroke: var(--accent); stroke-width: 1.6; }
+.brand svg.logo .c-hole { fill: var(--bg); stroke: var(--accent); stroke-width: .8; }
+.brand svg.logo .c-bore { fill: var(--bg); stroke: var(--accent); stroke-width: 1.2; }
+.brand svg.logo .c-sensor { fill: var(--accent-2); }
+.brand svg.logo .c-dot { fill: var(--bg); fill-opacity: .5; }
 
 /* ---------- Pins ---------- */
 .pin { display: inline-grid; place-items: center; width: 20px; height: 20px; flex: none; background: none; border: 0; border-radius: 4px; color: var(--sub); cursor: pointer; padding: 0; opacity: .55; transition: opacity .15s ease, color .15s ease, background-color .15s ease; }
