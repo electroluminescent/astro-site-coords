@@ -50,7 +50,12 @@
   L.control.scale({ imperial: true, metric: true }).addTo(map);
 
   // Light-pollution overlay (Lorenz atlas tiles: 1024 px, native to zoom 8)
+  // Own pane above the base tiles (tilePane z 200) and below vectors/markers (z 400+)
+  map.createPane('lpPane');
+  map.getPane('lpPane').style.zIndex = 250;
+  map.getPane('lpPane').style.pointerEvents = 'none';
   const lpLayer = L.tileLayer(window.LightPollution.overlayUrl, {
+    pane: 'lpPane',
     minZoom: 2, maxNativeZoom: 8, maxZoom: 19, tileSize: 1024, zoomOffset: -2, opacity: 0.5,
     errorTileUrl: window.LightPollution.errorTile,
     attribution: 'Light pollution: <a href="https://djlorenz.github.io/astronomy/lp/" target="_blank" rel="noopener">D. Lorenz atlas ' + window.LightPollution.YEAR + '</a>',
@@ -956,7 +961,7 @@
         cell: (h) => (h.gust == null ? { nodata: true } : { q: clamp01(1 - h.gust / 18), txt: String(Math.round(U.wind(h.gust))), tip: `${Math.round(U.wind(h.gust))} ${U.windU()}` }) },
       { key: 'temp', label: 'Temperature', sub: '2 m', group: 'Ground', src: () => omq('temperature_2m'),
         cell: (h) => (h.temp == null ? { nodata: true } : { q: clamp01(1 - (h.temp + 20) / 55), txt: String(Math.round(U.temp(h.temp))), tip: `${U.temp(h.temp).toFixed(1)} ${U.tempU()}` }) },
-      { key: 'dew', label: 'Dew point', sub: 'orange = dew risk', group: 'Ground', src: () => omq('dew_point_2m'),
+      { key: 'dew', label: 'Dew point', sub: '', group: 'Ground', src: () => omq('dew_point_2m'),
         cell: (h) => {
           if (h.dew == null) return { nodata: true };
           const sp = h.fog.spread;
@@ -1051,7 +1056,6 @@
       if (!dayGroups.length || dayGroups[dayGroups.length - 1].lbl !== lbl) dayGroups.push({ lbl, n: 0, start: i });
       dayGroups[dayGroups.length - 1].n++;
     });
-    const nowIdx = hours.findIndex((h, i) => i + 1 < hours.length && hours[i + 1].t.getTime() > Date.now());
     const dayStart = new Set(dayGroups.slice(1).map((g) => g.start));
     const ds = (i) => (dayStart.has(i) ? ' ds' : '');
 
@@ -1059,7 +1063,7 @@
     html += `<tr class="fc-days"><th class="fc-lbl" colspan="2"></th>${dayGroups.map((g) => `<th colspan="${g.n}" class="fc-day${ds(g.start)}"><span class="dl">${g.n >= 3 ? esc(g.lbl) : ''}</span></th>`).join('')}</tr>`;
     html += `<tr class="fc-hours"><th class="fc-lbl" colspan="2">Hour <span class="muted">(${esc(state.tz || 'local')})</span></th>${hours.map((h, i) => {
       const dark = h.sunAlt <= -18 ? 'd4' : h.sunAlt <= -12 ? 'd3' : h.sunAlt <= -6 ? 'd2' : h.sunAlt <= 0 ? 'd1' : 'd0';
-      return `<th data-c="${i}" class="${dark}${i === nowIdx ? ' now' : ''}${ds(i)}">${fmtHour(h.t)}</th>`;
+      return `<th data-c="${i}" class="${dark}${ds(i)}">${fmtHour(h.t)}</th>`;
     }).join('')}</tr></thead><tbody>`;
     let lastGroup = '';
     rows.forEach((r) => {
@@ -1122,7 +1126,6 @@
       <div class="fc-legend">
         <span>${scaleBar()} worse → better</span>
         <span><i class="red-swatch"></i> missing or estimated data</span>
-        <span><i class="mk-swatch"></i> fog / dew risk</span>
         <span class="muted">${esc(tzLabel)}</span>
       </div>
 `;
@@ -1167,6 +1170,7 @@
       if (cb.checked) set.delete(cb.dataset.row); else set.add(cb.dataset.row);
       saveSet('astrosite.fcHidden', set);
       cb.closest('tr').classList.toggle('off', !cb.checked);
+      placeMarkers(state.fcSel);
     });
     $('#fcVals', box).addEventListener('change', (e) => {
       state.showVals = e.target.checked;
@@ -1225,13 +1229,39 @@
     selectHour(pick[1], true, false, true);
   }
 
+  // One frame around the whole selected column, and a yellow "now" bar, drawn as overlays in the scroller
+  function placeMarkers(i) {
+    const box = $('#tonight');
+    const scroller = $('.fc-scroll', box);
+    if (!scroller) return;
+    const table = $('table.fc', scroller);
+    const th = $(`thead tr.fc-hours [data-c="${i}"]`, table);
+    const hoursRow = $('thead tr.fc-hours', table);
+    if (!th || !hoursRow) return;
+    let sel = $('.fc-sel', scroller), now = $('.fc-now', scroller);
+    if (!sel) { sel = document.createElement('div'); sel.className = 'fc-sel'; scroller.appendChild(sel); }
+    if (!now) { now = document.createElement('div'); now.className = 'fc-now'; scroller.appendChild(now); }
+    const top = hoursRow.offsetTop;
+    const height = table.offsetHeight - top;
+    Object.assign(sel.style, { left: `${th.offsetLeft}px`, width: `${th.offsetWidth}px`, top: `${top}px`, height: `${height}px` });
+    const hours = state.fc.hours;
+    const nowMs = Date.now();
+    const k = hours.findIndex((h, j) => j + 1 < hours.length && hours[j + 1].t.getTime() > nowMs && h.t.getTime() <= nowMs);
+    if (k >= 0) {
+      const thK = $(`thead tr.fc-hours [data-c="${k}"]`, table);
+      const frac = (nowMs - hours[k].t.getTime()) / 3600000;
+      now.hidden = false;
+      Object.assign(now.style, { left: `${thK.offsetLeft + frac * thK.offsetWidth - 1}px`, top: `${$('thead tr.fc-days', table).offsetTop}px`, height: `${table.offsetHeight}px` });
+      now.title = `Now · ${fmtTime(new Date())}`;
+    } else now.hidden = true;
+  }
+
   function selectHour(i, scroll, instant, alignNight) {
     const hours = state.fc.hours;
     i = Math.max(0, Math.min(hours.length - 1, i));
     state.fcSel = i;
     const box = $('#tonight');
-    $$('.sel', box).forEach((el) => el.classList.remove('sel'));
-    $$(`[data-c="${i}"]`, box).forEach((el) => el.classList.add('sel'));
+    placeMarkers(i);
     const slider = $('.fc-slider', box);
     if (slider && +slider.value !== i) slider.value = i;
     if (scroll) {
