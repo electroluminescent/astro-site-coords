@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/style.css?v=1.0.1">
+  <link rel="stylesheet" href="css/style.css?v=1.1.0">
 </head>
 <body>
   <header class="topbar">
@@ -55,27 +55,25 @@
       </div>
 
       <nav class="tabs" role="tablist">
-        <button role="tab" class="tab active" data-tab="values" aria-selected="true">All values</button>
-        <button role="tab" class="tab" data-tab="programs" aria-selected="false">By program</button>
-        <button role="tab" class="tab" data-tab="tonight" aria-selected="false">Tonight &amp; polar</button>
+        <button role="tab" class="tab active" data-tab="coords" aria-selected="true">Coordinates</button>
+        <button role="tab" class="tab" data-tab="tonight" aria-selected="false">Night forecast</button>
       </nav>
 
-      <div class="tab-body" id="tab-values">
+      <div class="tab-body" id="tab-coords">
         <div class="toolbar">
-          <span class="muted">Click any value to copy it</span>
+          <div class="seg" role="group" aria-label="Arrange coordinates">
+            <button data-view="program" class="on">By program</button>
+            <button data-view="type">By type</button>
+          </div>
           <div class="toolbar-btns">
-            <button class="btn small" id="copyTsv">Copy table</button>
+            <button class="btn small" id="copyTsv" title="Copy every distinct value as tab-separated text">Copy table</button>
             <button class="btn small" id="copyMd">Markdown</button>
             <button class="btn small" id="dlJson">JSON</button>
             <button class="btn small" id="copyLink">Share link</button>
           </div>
         </div>
-        <div id="valuesTable"></div>
-      </div>
-
-      <div class="tab-body" id="tab-programs" hidden>
-        <div class="toolbar"><span class="muted">Values formatted the way each program expects. Longitude is East-positive unless noted.</span></div>
-        <div id="programCards"></div>
+        <p class="view-hint muted" id="viewHint"></p>
+        <div id="coordsBody"></div>
       </div>
 
       <div class="tab-body" id="tab-tonight" hidden>
@@ -96,7 +94,8 @@
 
   <script src="vendor/leaflet/leaflet.js"></script>
   <script src="vendor/suncalc/suncalc.js"></script>
-  <script src="js/astro.js?v=1.0.1"></script>
-  <script src="js/app.js?v=1.0.1"></script>
+  <script src="js/astro.js?v=1.1.0"></script>
+  <script src="js/forecast-model.js?v=1.1.0"></script>
+  <script src="js/app.js?v=1.1.0"></script>
 </body>
 </html>

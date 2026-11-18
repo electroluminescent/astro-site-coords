@@ -243,40 +243,12 @@
 
   function lstHours(date, lonEast) { return mod(gmstDeg(date) + lonEast, 360) / 15; }
 
-  /* ---------- Precession (IAU 1976) J2000 -> date ---------- */
-  function precessJ2000(raDeg, decDeg, date) {
-    const T = (julianDate(date) - 2451545.0) / 36525;
-    const as = (x) => (x / 3600) * D2R;
-    const zeta = as(2306.2181 * T + 0.30188 * T * T + 0.017998 * T ** 3);
-    const z = as(2306.2181 * T + 1.09468 * T * T + 0.018203 * T ** 3);
-    const theta = as(2004.3109 * T - 0.42665 * T * T - 0.041833 * T ** 3);
-    const ra0 = raDeg * D2R, dec0 = decDeg * D2R;
-    const A = Math.cos(dec0) * Math.sin(ra0 + zeta);
-    const B = Math.cos(theta) * Math.cos(dec0) * Math.cos(ra0 + zeta) - Math.sin(theta) * Math.sin(dec0);
-    const C = Math.sin(theta) * Math.cos(dec0) * Math.cos(ra0 + zeta) + Math.cos(theta) * Math.sin(dec0);
-    const ra = mod(Math.atan2(A, B) + z, 2 * Math.PI) * R2D;
-    const dec = Math.atan2(C, Math.sqrt(A * A + B * B)) * R2D;
-    return { ra, dec };
-  }
-
-  // Pole stars, J2000 (Hipparcos). Proper motion over a few decades is < 2″, ignored.
-  const POLARIS = { name: 'Polaris', ra: (2 + 31 / 60 + 49.09 / 3600) * 15, dec: 89 + 15 / 60 + 50.79 / 3600 };
-  const SIGMA_OCT = { name: 'Sigma Octantis', ra: (21 + 8 / 60 + 46.86 / 3600) * 15, dec: -(88 + 57 / 60 + 23.4 / 3600) };
-
-  function poleStar(lat, lonEast, date) {
-    const star = lat >= 0 ? POLARIS : SIGMA_OCT;
-    const p = precessJ2000(star.ra, star.dec, date);
-    const lst = lstHours(date, lonEast) * 15;
-    const haDeg = mod(lst - p.ra, 360);
-    return { name: star.name, raDeg: p.ra, decDeg: p.dec, haHours: haDeg / 15, poleDistArcmin: (90 - Math.abs(p.dec)) * 60 };
-  }
-
   const api = {
     D2R, R2D, mod, pad,
     toSexagesimal, dmsHemi, dmsAscii, dmsSigned, ddmHemi, hmsFromDeg, hmsColon,
     lx200Lat, lx200Long,
     parseAngle, parseCoordinates, maidenhead, maidenheadToLatLon, ecef,
-    julianDate, gmstDeg, lstHours, precessJ2000, poleStar,
+    julianDate, gmstDeg, lstHours,
   };
   root.Astro = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
