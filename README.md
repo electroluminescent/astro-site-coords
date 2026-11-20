@@ -47,6 +47,8 @@ latitude / longitude / elevation format that astrophotography software asks for 
 - **Backup** (Home tab) — export every remembered setting (saved locations, pins, hidden rows/programs/groups, units, view, colour
   scheme, sidebar width, map layers) to a JSON file and import it to restore; reset all.
 - **Colour scheme** (Home tab) — Default or **Night** (monochrome red theme for dark adaptation; map imagery converted luminance → red).
+- The Layers panel starts closed on every load and scrolls inside the map when it is taller than the view (touch-friendly);
+  the hour caption and attribution stay within the map on narrow screens.
 - Layout: full-height sidebar with its tabs at the top; the header spans the map only and drops items by priority as it narrows
   (badge text → site coordinates → brand name). Resizable sidebar (width remembered), eased transitions and animated expand/collapse
   throughout, last site remembered.
@@ -54,8 +56,10 @@ latitude / longitude / elevation format that astrophotography software asks for 
   from Environment and Climate Change Canada's GeoMet WCS (no key, browser-accessible): **RDPS 10 km** (northern hemisphere, hourly
   to +84 h) and **GDPS 15 km** (global, to +10 days). One request returns the whole field for the view, so a layer costs one request per
   hour rather than one call per point, and the overlay is sampled on a much denser lattice. Within RDPS range, **Seeing** and
-  **Transparency** use CMC's astronomy indices (1–5; 0 = too cloudy to rate). Low/mid/high cloud, mist/fog, aerosols and anything
-  beyond GDPS range still come from Open-Meteo; the map caption names the source in use. Requests are paced (≤ 3 at a time, ≥ 250 ms
+  **Transparency** use CMC's astronomy indices (1–5; 0 = too cloudy to rate), **low / mid / high cloud** are estimated from RDPS
+  relative humidity at 925/850, 700/500 and 300/250 hPa (Sundqvist-type cloud fraction, upper levels rescaled towards ice saturation),
+  and **mist / fog** uses RDPS liquid- and ice-fog visibility — so inside RDPS range (+84 h) the map needs no Open-Meteo calls at all.
+  Aerosols and anything beyond RDPS/GDPS range still come from Open-Meteo; the map caption names the source in use. Requests are paced (≤ 3 at a time, ≥ 250 ms
   apart) and superseded ones are dropped, per MSC's usage policy.
 - **Requests per service** (Home → Forecast data) — successful requests from this browser for Open-Meteo forecast, air quality and
   elevation, ECCC GeoMet, NASA GIBS, the light-pollution atlas, Nominatim and base-map tiles: this hour, last hour, last 24 h and an

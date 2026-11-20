@@ -17,7 +17,7 @@
     'wind_speed_300hPa', 'wind_direction_300hPa', 'wind_speed_200hPa'];
   const SM = window.SkyModel;
   const OM = window.OpenMeteo;
-  const APP_VERSION = '1.11.0';
+  const APP_VERSION = '1.12.0';
 
   const state = {
     lat: null, lon: null,
@@ -2305,12 +2305,25 @@
   } catch (e) { /* ignore */ }
   const saveWxKeys = () => { try { localStorage.setItem('astrosite.wxLayers', JSON.stringify(wx.keys)); localStorage.removeItem('astrosite.wxLayer'); } catch (e) { /* ignore */ } };
 
+  // Keep the open Layers panel inside the map (it scrolls when taller), leaving room for the hour caption
+  function fitLayersPanel() {
+    const inner = document.querySelector('.wx-ctl .lyr-inner');
+    if (!inner) return;
+    const mapR = map.getContainer().getBoundingClientRect(), r = inner.getBoundingClientRect();
+    const cap = document.querySelector('.wx-caption');
+    const bottomGap = cap && !cap.hidden ? cap.getBoundingClientRect().height + 22 : 24; // clear the caption / attribution
+    inner.style.maxHeight = `${Math.max(120, Math.floor(mapR.bottom - bottomGap - r.top))}px`;
+  }
+  map.on('resize', fitLayersPanel);
+  window.addEventListener('resize', fitLayersPanel);
+
   const LayersControl = L.Control.extend({
     options: { position: 'topright' },
     onAdd() {
       const div = L.DomUtil.create('div', 'leaflet-bar wx-ctl');
-      let collapsed = false;
-      try { collapsed = localStorage.getItem('astrosite.layersCollapsed') === '1'; } catch (e) { /* ignore */ }
+      // Closed on every load (it covers much of a phone screen); open it with the title
+      const collapsed = true;
+      try { localStorage.removeItem('astrosite.layersCollapsed'); } catch (e) { /* ignore */ }
       const row = (attr, k, label, title) => `<tr data-row="${k}"><td><button type="button" class="lyr" ${attr}="${k}" aria-pressed="false"${title ? ` title="${esc(title)}"` : ''}>${label}</button></td>
         <td><input type="range" min="0" max="100" value="${Math.round(opOf(k) * 100)}" data-op="${k}" aria-label="${esc(label)} opacity" title="Opacity"></td></tr>`;
       div.innerHTML = `
@@ -2330,7 +2343,7 @@
       title.addEventListener('click', () => {
         const open = body.classList.contains('closed');
         body.classList.toggle('closed', !open); title.setAttribute('aria-expanded', open);
-        try { localStorage.setItem('astrosite.layersCollapsed', open ? '0' : '1'); } catch (e) { /* ignore */ }
+        fitLayersPanel();
       });
       div.querySelectorAll('[data-base]').forEach((b) => b.addEventListener('click', () => setBase(b.dataset.base)));
       const lpBtn = div.querySelector('[data-lyr="lp"]');
@@ -2631,7 +2644,7 @@
     return g;
   }
 
-  const GM_TO_H = { cloud_cover: 'cloud', temperature_2m: 'temp', dew_point_2m: 'dew', relative_humidity_2m: 'rh', wind_speed_10m: 'wind', wind_gusts_10m: 'gust', cmc_seeing: 'cmcSee', cmc_transparency: 'cmcTrans' };
+  const GM_TO_H = { cloud_cover: 'cloud', temperature_2m: 'temp', dew_point_2m: 'dew', relative_humidity_2m: 'rh', wind_speed_10m: 'wind', wind_gusts_10m: 'gust', cmc_seeing: 'cmcSee', cmc_transparency: 'cmcTrans', cloud_cover_low: 'cloudLow', cloud_cover_mid: 'cloudMid', cloud_cover_high: 'cloudHigh', visibility: 'vis' };
   function wxHour(p, ti) {
     const t = wx.grid.times[ti];
     const gmT = wx.grid.gm && wx.grid.gm.get(t);
@@ -2653,7 +2666,7 @@
     };
     if (gmT) {
       h.src = gmT.model;
-      Object.entries(gmT.vals).forEach(([v, a]) => { const x = a[p.i]; if (!Number.isNaN(x)) h[GM_TO_H[v]] = x; });
+      Object.entries(gmT.vals).forEach(([v, a]) => { const x = a[p.i]; if (!Number.isNaN(x) && GM_TO_H[v]) h[GM_TO_H[v]] = x; });
     }
     h.see = SM.seeing(h); h.trans = SM.transparency(h); h.fog = SM.fog(h); h.dewRisk = SM.dewRisk(h.fog.spread);
     return h;
@@ -2673,19 +2686,20 @@
   }
 
   function renderCaption() {
-    if (!wxActive()) { wxCap.hidden = true; return; }
+    if (!wxActive()) { wxCap.hidden = true; fitLayersPanel(); return; }
     const t = wxTime();
     const names = wx.keys.map((k) => (k === 'cloud' && isNowHour(t) ? 'Cloud cover (live satellite)' : WX_NAMES[k]));
     const bar = [0, 0.25, 0.5, 0.75, 1].map((q) => `<i style="background:${shade(q, false).bg}"></i>`).join('');
     const pl = wx.plan && wx.plan.t === floorHour(t) ? wx.plan : null;
     const srcNote = pl && pl.model
-      ? `<span class="src-note" title="${esc(`Model fields fetched directly from ECCC MSC GeoMet (${GM_MODEL_NAME[pl.model]})${pl.om.length ? `; ${pl.om.join(', ')} from Open-Meteo` : ''}`)}">${esc(`ECCC ${GM_MODEL_NAME[pl.model]}${pl.om.length || pl.needAq ? ' + Open-Meteo' : ''}`)}</span>`
+      ? `<span class="src-note" title="${esc(`Model fields fetched directly from ECCC MSC GeoMet (${GM_MODEL_NAME[pl.model]})${pl.gm.map((v) => GeoMet.derivedHow(pl.model, v) && `; ${v.replace(/_/g, ' ')} ${GeoMet.derivedHow(pl.model, v)}`).filter(Boolean).join('')}${pl.om.length ? `; ${pl.om.join(', ')} from Open-Meteo` : ''}`)}">${esc(`ECCC ${GM_MODEL_NAME[pl.model]}${pl.om.length || pl.needAq ? ' + Open-Meteo' : ''}`)}</span>`
       : '<span class="src-note" title="Forecast from Open-Meteo">Open-Meteo</span>';
     wxCap.innerHTML = `<button data-step="-1" title="Previous hour" aria-label="Previous hour">◀</button>
-      <span><b>${esc(names.join(' + '))}</b> · ${esc(state.tz ? `${fmtDay(new Date(t))} ${fmtTime(new Date(t))}` : localTime(new Date(t)))} · ${srcNote}${wx.loading ? ' · loading…' : ''}${OM.limited() ? ` · <span class="lim-note" title="Free Open-Meteo hourly limit reached; showing cached data">limit — cached until ${esc(new Date(OM.cooldownUntil()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))}</span>` : ''}</span>
+      <span><b>${esc(names.join(' + '))}</b> · ${esc(state.tz ? `${fmtDay(new Date(t))} ${fmtTime(new Date(t))}` : localTime(new Date(t)))}<span class="src-sep"> · </span>${srcNote}${wx.loading ? ' · loading…' : ''}${OM.limited() ? ` · <span class="lim-note" title="Free Open-Meteo hourly limit reached; showing cached data">limit — cached until ${esc(new Date(OM.cooldownUntil()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))}</span>` : ''}</span>
       <button data-step="1" title="Next hour" aria-label="Next hour">▶</button>
       <span class="scale" title="worse → better">${bar}</span>`;
     wxCap.hidden = false;
+    fitLayersPanel();
   }
 
   function rowDefsSafe() {

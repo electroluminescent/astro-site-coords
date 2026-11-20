@@ -24,6 +24,25 @@
     },
   };
   const PREFIX = { RDPS: 'RDPS_10km_', GDPS: 'GDPS_15km_' };
+  // Variables built from several coverages (RDPS only: hourly at every level).
+  // Layer cloud: Sundqvist-type fraction from relative humidity, cf = 1 − √((1 − RH)/(1 − RHc)); at the cold upper levels the
+  // model's RH (over water) is rescaled towards ice saturation. Visibility: the lower of liquid- and ice-fog visibility (m).
+  const cf = (rh, rhc, scale = 1) => {
+    if (Number.isNaN(rh)) return NaN;
+    const r = Math.min(100, rh / scale);
+    return r <= rhc ? 0 : 100 * (1 - Math.sqrt((100 - r) / (100 - rhc)));
+  };
+  const maxN = (...v) => { const f = v.filter((x) => !Number.isNaN(x)); return f.length ? Math.max(...f) : NaN; };
+  const minN = (...v) => { const f = v.filter((x) => !Number.isNaN(x)); return f.length ? Math.min(...f) : NaN; };
+  const DERIVED = {
+    RDPS: {
+      cloud_cover_low: { covs: ['RDPS_10km_RelativeHumidity_925mb', 'RDPS_10km_RelativeHumidity_850mb'], combine: (a, b) => maxN(cf(a, 80), cf(b, 80)), how: 'from humidity at 925/850 hPa' },
+      cloud_cover_mid: { covs: ['RDPS_10km_RelativeHumidity_700mb', 'RDPS_10km_RelativeHumidity_500mb'], combine: (a, b) => maxN(cf(a, 70, 0.92), cf(b, 70, 0.85)), how: 'from humidity at 700/500 hPa' },
+      cloud_cover_high: { covs: ['RDPS_10km_RelativeHumidity_300mb', 'RDPS_10km_RelativeHumidity_250mb'], combine: (a, b) => maxN(cf(a, 75, 0.7), cf(b, 75, 0.68)), how: 'from humidity at 300/250 hPa' },
+      visibility: { covs: ['RDPS-WEonG_10km_LiquidFogVisibility', 'RDPS-WEonG_10km_IceFogVisibility'], combine: (a, b) => minN(a, b), how: 'liquid / ice fog visibility' },
+    },
+    GDPS: {},
+  };
   const NATIVE = { RDPS: 0.09, GDPS: 0.15 };      // native grid spacing (degrees, approx.)
   const RDPS_SOUTH = -3.8;                         // RDPS domain: northern hemisphere
 
@@ -120,7 +139,11 @@
   // bbox: {w,s,e,n} in degrees (w<e, no dateline crossing); res: degrees per pixel
   // stale(): optional; when it returns true before the request starts, the request is dropped
   function field(model, omVar, t, bbox, res, stale) {
-    const cov = PREFIX[model] + VARS[model][omVar];
+    const d = DERIVED[model] && DERIVED[model][omVar];
+    if (d) return Promise.all(d.covs.map((c) => coverage(c, t, bbox, res, stale))).then((parts) => ({ parts, combine: d.combine }));
+    return coverage(PREFIX[model] + VARS[model][omVar], t, bbox, res, stale);
+  }
+  function coverage(cov, t, bbox, res, stale) {
     const iso = new Date(t).toISOString().slice(0, 19) + 'Z';
     const key = `${cov}|${iso}|${bbox.w},${bbox.s},${bbox.e},${bbox.n}|${res}`;
     if (mem.has(key)) { const v = mem.get(key); remember(key, v); return v; }
@@ -146,6 +169,7 @@
 
   function sample(f, lat, lon) {
     if (!f) return NaN;
+    if (f.parts) return f.combine(...f.parts.map((p) => sample(p, lat, lon)));
     const fx = (lon - f.x0) / f.dx - 0.5, fy = (f.y0 - lat) / f.dy - 0.5;
     if (fx < -0.5 || fy < -0.5 || fx > f.W - 0.5 || fy > f.H - 0.5) return NaN;
     const x0 = Math.max(0, Math.min(f.W - 1, Math.floor(fx))), y0 = Math.max(0, Math.min(f.H - 1, Math.floor(fy)));
@@ -169,7 +193,8 @@
     }
     return null;
   }
-  const serves = (model, omVar) => !!(model && VARS[model][omVar]);
+  const serves = (model, omVar) => !!(model && (VARS[model][omVar] || DERIVED[model][omVar]));
+  const derivedHow = (model, omVar) => (model && DERIVED[model][omVar] ? DERIVED[model][omVar].how : '');
 
   // Snap a view box outward so small pans reuse the same fields; resolution suits the requested spacing
   function snapBox(b, spacingDeg, model) {
@@ -180,7 +205,7 @@
     return { box: { w: +w.toFixed(4), s: +s.toFixed(4), e: +e.toFixed(4), n: +n.toFixed(4) }, res };
   }
 
-  const api = { VARS, PREFIX, times, hasTime, field, sample, modelFor, serves, snapBox, readTiff, requests: () => reqCount, RDPS_SOUTH };
+  const api = { VARS, DERIVED, PREFIX, derivedHow, times, hasTime, field, sample, modelFor, serves, snapBox, readTiff, requests: () => reqCount, RDPS_SOUTH };
   root.GeoMet = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);
