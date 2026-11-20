@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/style.css?v=1.9.0">
+  <link rel="stylesheet" href="css/style.css?v=1.10.0">
 </head>
 <body>
 
@@ -114,7 +114,7 @@
         </section>
         <section class="set-group">
           <h5 class="sec">Forecast data</h5>
-          <div class="set-row"><span>Forecast data usage<small class="muted" id="omUsage"></small></span></div>
+          <div class="set-row req-row"><span>Requests per service</span><div id="reqUsage" class="req-usage"></div></div>
           <div class="set-row"><span>API key <small class="muted">Optional — paid Open-Meteo plans lift the free 5,000 calls/hour limit</small></span>
             <input type="password" id="omKey" class="key-input" placeholder="none (free API)" autocomplete="off" spellcheck="false"></div>
         </section>
@@ -163,12 +163,13 @@
 
   <script src="vendor/leaflet/leaflet.js"></script>
   <script src="vendor/suncalc/suncalc.js"></script>
-  <script src="js/color.js?v=1.9.0"></script>
-  <script src="js/astro.js?v=1.9.0"></script>
-  <script src="js/openmeteo.js?v=1.9.0"></script>
-  <script src="js/geomet.js?v=1.9.0"></script>
-  <script src="js/forecast-model.js?v=1.9.0"></script>
-  <script src="js/lightpollution.js?v=1.9.0"></script>
-  <script src="js/app.js?v=1.9.0"></script>
+  <script src="js/color.js?v=1.10.0"></script>
+  <script src="js/astro.js?v=1.10.0"></script>
+  <script src="js/usage.js?v=1.10.0"></script>
+  <script src="js/openmeteo.js?v=1.10.0"></script>
+  <script src="js/geomet.js?v=1.10.0"></script>
+  <script src="js/forecast-model.js?v=1.10.0"></script>
+  <script src="js/lightpollution.js?v=1.10.0"></script>
+  <script src="js/app.js?v=1.10.0"></script>
 </body>
 </html>

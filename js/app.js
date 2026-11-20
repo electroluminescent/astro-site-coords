@@ -17,7 +17,7 @@
     'wind_speed_300hPa', 'wind_direction_300hPa', 'wind_speed_200hPa'];
   const SM = window.SkyModel;
   const OM = window.OpenMeteo;
-  const APP_VERSION = '1.9.0';
+  const APP_VERSION = '1.10.0';
 
   const state = {
     lat: null, lon: null,
@@ -45,6 +45,7 @@
       maxZoom: 19, className: 'tiles-dark', attribution: '© OpenStreetMap contributors',
     }),
   };
+  Object.values(baseLayers).forEach((l) => l.on('tileload', () => ReqUsage.record('basemap')));
   let savedLayer = 'Dark';
   try { savedLayer = localStorage.getItem('astrosite.layer') || 'Dark'; } catch (e) { /* ignore */ }
   (baseLayers[savedLayer] || baseLayers.Dark).addTo(map);
@@ -61,6 +62,7 @@
     errorTileUrl: window.LightPollution.errorTile,
     attribution: 'Light pollution: <a href="https://djlorenz.github.io/astronomy/lp/" target="_blank" rel="noopener">D. Lorenz atlas ' + window.LightPollution.YEAR + '</a>',
   });
+  lpLayer.on('tileload', () => ReqUsage.record('lp'));
   let mapQuality = 'standard';
   let smoothMapPref = false, smoothDataPref = false;
   try {
@@ -156,6 +158,7 @@
     if (wait) await new Promise((r) => setTimeout(r, wait));
     const res = await fetch(`${NOMINATIM}${path}`, { headers: { 'Accept-Language': navigator.language || 'en' } });
     if (!res.ok) throw new Error(`Search failed (${res.status})`);
+    ReqUsage.record('nominatim');
     return res.json();
   }
 
@@ -1779,6 +1782,24 @@
 
   /* ---------------- Settings backup: everything the browser remembers ---------------- */
   const CFG_PREFIX = 'astrosite.';
+  // Successful requests per service: this hour, previous hour, last 24 h, and an hourly bar strip
+  function renderReqUsage() {
+    const el = $('#reqUsage');
+    if (!el) return;
+    const sum = ReqUsage.summary();
+    const rows = ReqUsage.SERVICES.map(([id, name]) => {
+      const s = sum[id], ser = ReqUsage.series(id, 24), max = Math.max(1, ...ser);
+      const bars = ser.map((v, i) => `<i style="height:${v ? Math.max(8, Math.round((v / max) * 100)) : 0}%" title="${esc(`${new Date((Math.floor(Date.now() / 3600000) - 23 + i) * 3600000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}: ${v}`)}"></i>`).join('');
+      const z = (v) => (v ? v.toLocaleString() : '<span class="muted">0</span>');
+      return `<tr${s.day ? '' : ' class="idle"'}><td>${esc(name)}</td><td>${z(s.now)}</td><td>${z(s.prev)}</td><td>${z(s.day)}</td><td class="spark"><div>${bars}</div></td></tr>`;
+    }).join('');
+    const u = OM.usage();
+    el.innerHTML = `<table class="req-table"><thead><tr><th>Service</th><th title="Successful requests since the start of this hour">This hour</th><th title="Successful requests in the previous clock hour">Last hour</th><th title="Last 24 hours">24 h</th><th title="Requests per hour, last 24 hours">Per hour</th></tr></thead><tbody>${rows}</tbody></table>
+      <small class="muted">Successful requests from this browser. Open-Meteo counts weighted calls against its free limit (shared by every device on your IP): ≈ ${u.hour.toLocaleString()} this hour, ${u.day.toLocaleString()} today.${OM.limited() ? ` <span class="lim-note">Limit reached — resuming ${esc(new Date(OM.cooldownUntil()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))}.</span>` : ''}</small>`;
+  }
+  ReqUsage.onChange(() => { if (!$('#tab-home').hidden) renderReqUsage(); });
+  setInterval(() => { if (!$('#tab-home').hidden) renderReqUsage(); }, 60000);
+
   function refreshSettings() {
     const n = Object.keys(localStorage).filter((k) => k.startsWith(CFG_PREFIX)).length;
     $('#cfgCount').textContent = `${n} stored setting${n === 1 ? '' : 's'}`;
@@ -1789,8 +1810,7 @@
     $('#smoothMapChk').checked = smoothMapPref;
     $('#smoothDataChk').checked = smoothDataPref;
     $('#appVersion').textContent = APP_VERSION;
-    const u = OM.usage();
-    $('#omUsage').textContent = `≈ ${u.hour.toLocaleString()} calls this hour · ${u.day.toLocaleString()} today (this browser) · ECCC GeoMet map fields: ${GeoMet.requests()} requests this session${OM.limited() ? ` · limit reached, resuming ${new Date(OM.cooldownUntil()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}`;
+    renderReqUsage();
     const ki = $('#omKey'); if (document.activeElement !== ki) ki.value = OM.apiKey();
   }
   $$('#unitsSeg button').forEach((b) => b.addEventListener('click', () => setUnits(b.dataset.units)));
@@ -2132,7 +2152,7 @@
   const loadImg = (url) => new Promise((res) => {
     const im = new Image();
     im.crossOrigin = 'anonymous';
-    im.onload = () => res(im); im.onerror = () => res(null);
+    im.onload = () => { ReqUsage.record('gibs'); res(im); }; im.onerror = () => res(null);
     im.src = url;
   });
   const SatCloudLayer = L.GridLayer.extend({

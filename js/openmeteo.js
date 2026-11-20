@@ -95,6 +95,7 @@
     if (res.status === 429 || /limit/i.test(reason)) { setCooldown(reason || 'hourly'); throw new LimitError(cooldownUntil, reason); }
     if (!res.ok || (body && body.error)) throw new Error(reason || `HTTP ${res.status}`);
     addUsage(w);
+    if (root.ReqUsage) root.ReqUsage.record({ forecast: 'om-forecast', aq: 'om-aq', elevation: 'om-elevation' }[kind] || 'om-forecast');
     return body;
   }
 

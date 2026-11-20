@@ -40,7 +40,7 @@
     const key = `${year}/${tx}/${ty}`;
     if (!cache.has(key)) {
       cache.set(key, fetch(`${BASE}/binary_tiles/${year}/binary_tile_${tx}_${ty}.dat.gz`)
-        .then((r) => { if (!r.ok) throw new Error(`Atlas tile ${r.status}`); return r.arrayBuffer(); })
+        .then((r) => { if (!r.ok) throw new Error(`Atlas tile ${r.status}`); if (window.ReqUsage) window.ReqUsage.record('lp'); return r.arrayBuffer(); })
         .then(gunzip)
         .catch((e) => { cache.delete(key); throw e; }));
     }

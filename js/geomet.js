@@ -65,6 +65,7 @@
       const ref = /<Dimension name="reference_time"[^>]*>([^<]*)/.exec(txt);
       const t = parseTimes(d && d[1]);
       if (!t) throw new Error('GeoMet: no time dimension');
+      if (root.ReqUsage) root.ReqUsage.record('geomet');
       t.ref = ref ? ref[1].split('/')[1] || ref[1] : '';
       return t;
     });
@@ -134,7 +135,9 @@
         const m = /<ServiceException[^>]*>([\s\S]*?)<\/ServiceException>/.exec(txt);
         throw new Error(`GeoMet ${cov}: ${m ? m[1].trim() : `HTTP ${r.status}`}`);
       }
-      return readTiff(await r.arrayBuffer());
+      const out = readTiff(await r.arrayBuffer());
+      if (root.ReqUsage) root.ReqUsage.record('geomet');
+      return out;
     }, stale);
     remember(key, p);
     p.catch(() => mem.delete(key));

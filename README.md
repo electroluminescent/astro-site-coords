@@ -54,6 +54,9 @@ latitude / longitude / elevation format that astrophotography software asks for 
   **Transparency** use CMC's astronomy indices (1–5; 0 = too cloudy to rate). Low/mid/high cloud, mist/fog, aerosols and anything
   beyond GDPS range still come from Open-Meteo; the map caption names the source in use. Requests are paced (≤ 3 at a time, ≥ 250 ms
   apart) and superseded ones are dropped, per MSC's usage policy.
+- **Requests per service** (Home → Forecast data) — successful requests from this browser for Open-Meteo forecast, air quality and
+  elevation, ECCC GeoMet, NASA GIBS, the light-pollution atlas, Nominatim and base-map tiles: this hour, last hour, last 24 h and an
+  hourly bar strip, alongside Open-Meteo's weighted call estimate.
 - **Open-Meteo usage** — all requests are cached (forecast points on a fixed lattice of at most ~120 points per view and no finer than
   0.1°, per variable, in 7-day windows; aerosol on a shared 0.4° grid) so panning, stepping hours and reloads re-use data; only the
   variables of active layers are fetched. Requests are paced to stay under 400 calls/minute and 4,000/hour from this browser (below the
