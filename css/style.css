@@ -700,6 +700,7 @@ body.night { --lp-tint: #ff7a7a; --lp-tint-fg: #000; }
 .key-input { width: 210px; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; font: 12px var(--mono); }
 .key-input:focus { outline: none; border-color: var(--accent); }
 .wx-caption .lim-note { color: var(--danger); }
+.wx-caption .src-note { color: var(--muted); font-size: 11px; }
 
 /* Home rows: rename / remove */
 .hl-namebox { flex: none; width: 150px; display: flex; align-items: center; min-width: 0; position: relative; }

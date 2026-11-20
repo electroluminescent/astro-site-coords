@@ -17,7 +17,7 @@
     'wind_speed_300hPa', 'wind_direction_300hPa', 'wind_speed_200hPa'];
   const SM = window.SkyModel;
   const OM = window.OpenMeteo;
-  const APP_VERSION = '1.8.0';
+  const APP_VERSION = '1.9.0';
 
   const state = {
     lat: null, lon: null,
@@ -1790,7 +1790,7 @@
     $('#smoothDataChk').checked = smoothDataPref;
     $('#appVersion').textContent = APP_VERSION;
     const u = OM.usage();
-    $('#omUsage').textContent = `≈ ${u.hour.toLocaleString()} calls this hour · ${u.day.toLocaleString()} today (this browser)${OM.limited() ? ` · limit reached, resuming ${new Date(OM.cooldownUntil()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}`;
+    $('#omUsage').textContent = `≈ ${u.hour.toLocaleString()} calls this hour · ${u.day.toLocaleString()} today (this browser) · ECCC GeoMet map fields: ${GeoMet.requests()} requests this session${OM.limited() ? ` · limit reached, resuming ${new Date(OM.cooldownUntil()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}`;
     const ki = $('#omKey'); if (document.activeElement !== ki) ki.value = OM.apiKey();
   }
   $$('#unitsSeg button').forEach((b) => b.addEventListener('click', () => setUnits(b.dataset.units)));
@@ -2364,25 +2364,38 @@
   }
   map.on('moveend', () => { if (wxActive()) scheduleWx(600); });
 
-  function viewCovered() {
+  function viewCovered(pl) {
     if (!wx.grid) return false;
-    const sp = latticeSp();
-    if (wx.grid.zoom !== map.getZoom() || wx.grid.sp !== sp || !wx.grid.bounds.contains(map.getBounds())) return false;
-    // data for all active layers must have been requested for this grid
-    return wx.grid.keysSig === wx.keys.slice().sort().join(',');
+    const dense = !pl.om.length && !pl.needAq;
+    const sp = latticeSp(dense);
+    if (wx.grid.zoom !== map.getZoom() || wx.grid.sp !== sp || wx.grid.dense !== dense || !wx.grid.bounds.contains(map.getBounds())) return false;
+    // Open-Meteo data for all active layers must have been requested for this grid
+    return wx.grid.omSig === `${pl.om.join(',')}|${pl.needAq ? 1 : 0}`;
   }
 
   async function updateWx() {
     if (!wxActive()) { clearWx(); return; }
     const t = floorHour(wxTime());
-    // (live satellite cloud cover also uses the grid: 2 m temperature is its clear-sky reference)
-    if (viewCovered() && wx.grid.times.includes(t) && (!isNowHour(t) || wx.grid.times.includes(floorHour(Date.now())))) { renderWx(); return; }
     const id = ++wx.req;
+    const pl = await wxPlan(t);
+    if (id !== wx.req) return;
+    wx.plan = pl;
+    // (live satellite cloud cover also uses the grid: 2 m temperature is its clear-sky reference)
+    if (viewCovered(pl) && wx.grid.times.includes(t)) {
+      const have = wx.grid.gm && wx.grid.gm.get(t);
+      if (!pl.model || (have && have.model === pl.model && pl.gm.every((v) => have.vals[v]))) { renderWx(); return; }
+      wx.loading = true; renderCaption();
+      const err = await fetchGm(wx.grid, pl, id);
+      if (id !== wx.req) return;
+      if (err) toast(`Some ECCC forecast data unavailable: ${err.message}`);
+      wx.loading = false; renderWx();
+      return;
+    }
     wx.loading = true; renderCaption();
     try {
-      const grid = await fetchWxGrid(t);
+      const grid = await fetchWxGrid(t, pl, id);
       if (id !== wx.req) return;
-      grid.keysSig = wx.keys.slice().sort().join(',');
+      grid.omSig = `${pl.om.join(',')}|${pl.needAq ? 1 : 0}`;
       wx.grid = grid;
       if (grid.error && !grid.error.limit) toast(`Some forecast data unavailable: ${grid.error.message}`);
     } catch (err) {
@@ -2418,17 +2431,74 @@
 
   // Lattice spacing in screen px, fixed per zoom so panning reuses points. Doubling keeps points nested across zooms.
   // Never finer than ~0.1° (model resolution) and never more than ~120 points per view.
-  function latticeSp() {
-    let sp = mapQuality === 'high' ? 120 : 160;
+  // When ECCC GeoMet serves every active layer the points cost nothing, so the lattice is much denser.
+  function latticeSp(dense) {
+    let sp = dense ? (mapQuality === 'high' ? 30 : 40) : (mapQuality === 'high' ? 120 : 160);
     const degPerPx = 360 / (256 * 2 ** map.getZoom());
     while (sp * degPerPx < 0.1) sp *= 2;
     const pb = map.getPixelBounds();
-    while (((Math.ceil(pb.max.x / sp) - Math.floor(pb.min.x / sp) + 1) * (Math.ceil(pb.max.y / sp) - Math.floor(pb.min.y / sp) + 1)) > 120) sp *= 2;
+    const maxPts = dense ? 2500 : 120;
+    while (((Math.ceil(pb.max.x / sp) - Math.floor(pb.min.x / sp) + 1) * (Math.ceil(pb.max.y / sp) - Math.floor(pb.min.y / sp) + 1)) > maxPts) sp *= 2;
     return sp;
   }
-  async function fetchWxGrid(t) {
+
+  /* ---- Direct model data from ECCC MSC GeoMet (RDPS 10 km / GDPS 15 km): one request per layer per hour ---- */
+  const GM_MODEL_NAME = { RDPS: 'RDPS 10 km', GDPS: 'GDPS 15 km' };
+  // CMC astronomy indices replace the derived seeing/transparency where RDPS covers the hour
+  const GM_EXTRA = { see: ['cmc_seeing', 'cloud_cover'], trans: ['cmc_transparency', 'cloud_cover'] };
+  function viewBox() {
+    const b = map.getBounds();
+    let w = b.getWest(), e = b.getEast();
+    if (e - w >= 360) return null;
+    const shift = Math.floor((w + 180) / 360) * 360; w -= shift; e -= shift;
+    if (e > 180) return null; // view crosses the date line
+    return { w, e, s: Math.max(-89, b.getSouth()), n: Math.min(89, b.getNorth()) };
+  }
+  // What GeoMet serves for hour t in this view, and what Open-Meteo still has to provide
+  async function wxPlan(t) {
+    const box = viewBox();
+    let model = null;
+    if (box) { try { model = await GeoMet.modelFor(t, box); } catch (e) { model = null; } }
+    const gmVars = new Set(), omVars = new Set();
+    wx.keys.forEach((k) => {
+      if (model === 'RDPS' && GM_EXTRA[k]) { GM_EXTRA[k].forEach((v) => gmVars.add(v)); return; }
+      (WX_VARS[k] || []).forEach((v) => (GeoMet.serves(model, v) ? gmVars : omVars).add(v));
+    });
+    const needAq = wx.keys.includes('trans') && !(model === 'RDPS');
+    return { t, model: gmVars.size ? model : null, gm: [...gmVars].sort(), om: [...omVars].sort(), needAq, box };
+  }
+  const planSig = (pl) => `${pl.model || '-'}|${pl.gm.join(',')}|${pl.om.join(',')}|${pl.needAq ? 1 : 0}`;
+  let gmNoted = false;
+  async function fetchGm(g, pl, id) {
+    if (!pl.model || !pl.gm.length) return null;
+    g.gm = g.gm || new Map();
+    const have = g.gm.get(pl.t);
+    if (have && have.model === pl.model && pl.gm.every((v) => have.vals[v])) return null;
+    const b = g.bounds;
+    const spDeg = (g.sp * 360) / (256 * 2 ** g.zoom);
+    const { box, res } = GeoMet.snapBox({ w: Math.max(-180, b.getWest()), e: Math.min(180, b.getEast()), s: b.getSouth(), n: b.getNorth() }, spDeg, pl.model);
+    const entry = have && have.model === pl.model ? have : { model: pl.model, vals: {} };
+    // brief settle time so stepping quickly through hours only fetches the hour that ends up shown
+    if (id != null) { await new Promise((r) => setTimeout(r, 150)); if (id !== wx.req) return null; }
+    let error = null;
+    await Promise.all(pl.gm.filter((v) => !entry.vals[v]).map(async (v) => {
+      try {
+        const f = await GeoMet.field(pl.model, v, pl.t, box, res, () => id != null && id !== wx.req);
+        const a = new Float32Array(g.pts.length);
+        g.pts.forEach((p, i) => { a[i] = GeoMet.sample(f, p.lat, p.lon); });
+        entry.vals[v] = a;
+      } catch (err) { if (!/superseded/.test(err.message)) error = err; }
+    }));
+    if (id != null && id !== wx.req) return null;
+    g.gm.set(pl.t, entry);
+    g.cache = new Map(); // fields derived from points must be rebuilt
+    if (!gmNoted) { gmNoted = true; map.attributionControl.addAttribution('Forecast fields: <a href="https://eccc-msc.github.io/open-data/msc-geomet/readme_en/" target="_blank" rel="noopener">ECCC MSC GeoMet</a> (RDPS/GDPS)'); }
+    return error;
+  }
+  async function fetchWxGrid(t, pl, id) {
     const zoom = map.getZoom();
-    const sp = latticeSp();
+    const dense = !pl.om.length && !pl.needAq;
+    const sp = latticeSp(dense);
     const pb = map.getPixelBounds();
     const c0 = Math.floor(pb.min.x / sp), c1 = Math.ceil(pb.max.x / sp), r0 = Math.floor(pb.min.y / sp), r1 = Math.ceil(pb.max.y / sp);
     const cols = c1 - c0 + 1, rows = r1 - r0 + 1;
@@ -2437,7 +2507,7 @@
       for (let c = c0; c <= c1; c++) {
         const ll = map.unproject([c * sp, r * sp], zoom);
         const lat = Math.max(-85, Math.min(85, ll.lat)), lon = A.mod(ll.lng + 180, 360) - 180;
-        pts.push({ lat, lon, r: r - r0, c: c - c0, key: `${lat.toFixed(3)},${lon.toFixed(3)}` });
+        pts.push({ lat, lon, r: r - r0, c: c - c0, i: pts.length, key: `${lat.toFixed(3)},${lon.toFixed(3)}` });
       }
     }
     const nw = map.unproject([(c0 - 0.5) * sp, (r0 - 0.5) * sp], zoom), se = map.unproject([(c1 + 0.5) * sp, (r1 + 0.5) * sp], zoom);
@@ -2446,8 +2516,8 @@
     const DAY = 86400000;
     const start = Math.floor(t / DAY) * DAY - DAY, end = start + WIN_DAYS * DAY - 3600000;
     const times = []; for (let x = start; x <= end; x += 3600000) times.push(x);
-    const need = [...new Set(wx.keys.flatMap((k) => WX_VARS[k] || []))];
-    const needAq = wx.keys.includes('trans');
+    const need = pl.om;
+    const needAq = pl.needAq;
 
     // Which points are missing which data?
     const covers = (e) => e && e.start <= start && e.end >= end;
@@ -2496,13 +2566,18 @@
     for (const job of jobs) {
       try { await job(); } catch (err) { error = err; if (err.limit) break; }
     }
-    return { pts, cols, rows, bounds, zoom, times, sp, c0, r0, error };
+    const g = { pts, cols, rows, bounds, zoom, times, sp, c0, r0, error, dense };
+    const gErr = await fetchGm(g, pl, id);
+    if (gErr && !g.error) g.error = gErr;
+    return g;
   }
 
+  const GM_TO_H = { cloud_cover: 'cloud', temperature_2m: 'temp', dew_point_2m: 'dew', relative_humidity_2m: 'rh', wind_speed_10m: 'wind', wind_gusts_10m: 'gust', cmc_seeing: 'cmcSee', cmc_transparency: 'cmcTrans' };
   function wxHour(p, ti) {
-    const e = ptEntry(p.key);
-    if (!e) return null;
     const t = wx.grid.times[ti];
+    const gmT = wx.grid.gm && wx.grid.gm.get(t);
+    const e = ptEntry(p.key) || (gmT ? { start: t, vars: {} } : null);
+    if (!e) return null;
     const i = Math.round((t - e.start) / 3600000);
     const V = e.vars || {};
     const g = (k) => (V[k] && i >= 0 && i < V[k].length ? V[k][i] : null);
@@ -2517,6 +2592,10 @@
       ws300: g('wind_speed_300hPa'), wd300: g('wind_direction_300hPa'), ws200: g('wind_speed_200hPa'),
       aod: aq && ai >= 0 && ai < aq.v.length ? aq.v[ai] : null,
     };
+    if (gmT) {
+      h.src = gmT.model;
+      Object.entries(gmT.vals).forEach(([v, a]) => { const x = a[p.i]; if (!Number.isNaN(x)) h[GM_TO_H[v]] = x; });
+    }
     h.see = SM.seeing(h); h.trans = SM.transparency(h); h.fog = SM.fog(h); h.dewRisk = SM.dewRisk(h.fog.spread);
     return h;
   }
@@ -2539,8 +2618,12 @@
     const t = wxTime();
     const names = wx.keys.map((k) => (k === 'cloud' && isNowHour(t) ? 'Cloud cover (live satellite)' : WX_NAMES[k]));
     const bar = [0, 0.25, 0.5, 0.75, 1].map((q) => `<i style="background:${shade(q, false).bg}"></i>`).join('');
+    const pl = wx.plan && wx.plan.t === floorHour(t) ? wx.plan : null;
+    const srcNote = pl && pl.model
+      ? `<span class="src-note" title="${esc(`Model fields fetched directly from ECCC MSC GeoMet (${GM_MODEL_NAME[pl.model]})${pl.om.length ? `; ${pl.om.join(', ')} from Open-Meteo` : ''}`)}">${esc(`ECCC ${GM_MODEL_NAME[pl.model]}${pl.om.length || pl.needAq ? ' + Open-Meteo' : ''}`)}</span>`
+      : '<span class="src-note" title="Forecast from Open-Meteo">Open-Meteo</span>';
     wxCap.innerHTML = `<button data-step="-1" title="Previous hour" aria-label="Previous hour">◀</button>
-      <span><b>${esc(names.join(' + '))}</b> · ${esc(state.tz ? `${fmtDay(new Date(t))} ${fmtTime(new Date(t))}` : localTime(new Date(t)))}${wx.loading ? ' · loading…' : ''}${OM.limited() ? ` · <span class="lim-note" title="Free Open-Meteo hourly limit reached; showing cached data">limit — cached until ${esc(new Date(OM.cooldownUntil()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))}</span>` : ''}</span>
+      <span><b>${esc(names.join(' + '))}</b> · ${esc(state.tz ? `${fmtDay(new Date(t))} ${fmtTime(new Date(t))}` : localTime(new Date(t)))} · ${srcNote}${wx.loading ? ' · loading…' : ''}${OM.limited() ? ` · <span class="lim-note" title="Free Open-Meteo hourly limit reached; showing cached data">limit — cached until ${esc(new Date(OM.cooldownUntil()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))}</span>` : ''}</span>
       <button data-step="1" title="Next hour" aria-label="Next hour">▶</button>
       <span class="scale" title="worse → better">${bar}</span>`;
     wxCap.hidden = false;
@@ -2566,6 +2649,17 @@
     },
   });
 
+  // CMC astronomy indices (RDPS): seeing 1 (> 4″) … 5 (< 0.4″), transparency 1 (poor) … 5 (excellent); 0 = too cloudy to rate
+  const CMC_SEE = ['Too cloudy to rate', 'Bad (> 4″)', 'Poor (2–4″)', 'Average (1–2″)', 'Good (0.4–1″)', 'Excellent (< 0.4″)'];
+  const CMC_TRANS = ['Too cloudy to rate', 'Poor', 'Below average', 'Average', 'Above average', 'Excellent'];
+  function mapCell(def, h) {
+    const idx = def.key === 'see' ? h.cmcSee : def.key === 'trans' ? h.cmcTrans : null;
+    if (idx == null || !isFinite(idx)) return def.cell(h);
+    const i = Math.max(0, Math.min(5, Math.round(idx)));
+    const names = def.key === 'see' ? CMC_SEE : CMC_TRANS;
+    return { q: i ? (i - 1) / 4 : 0, txt: i ? String(i) : '☁', tip: `${i}/5 — ${names[i]} (CMC ${def.key === 'see' ? 'seeing' : 'sky transparency'} index, RDPS)` };
+  }
+
   // Values for every grid point at one forecast hour (cached per layer/units/theme)
   function wxField(ti, def) {
     const g = wx.grid;
@@ -2576,7 +2670,7 @@
     const f = { q: new Float32Array(n), lim: new Uint8Array(n), nd: new Uint8Array(n), labels: [] };
     g.pts.forEach((p, k) => {
       const h = wxHour(p, ti);
-      const c = h ? def.cell(h) : { nodata: true };
+      const c = h ? mapCell(def, h) : { nodata: true };
       if (c.nodata || c.q == null) { f.nd[k] = 1; f.q[k] = 0.5; } else f.q[k] = c.q;
       f.lim[k] = c.lim ? 1 : 0;
       if (!c.nodata) f.labels.push({ p, html: c.html || esc(c.txt || '') });
@@ -2707,9 +2801,12 @@
     const from = st.shown;
     const fi = from != null && st.shownGrid === g ? g.times.indexOf(from) : -1;
     const hours = Math.abs(ti - fi);
+    // GeoMet fields are fetched per hour, so those layers blend straight from the shown hour to the new one
+    const pl = wx.plan;
+    const gmLayer = !!(g.gm && g.gm.get(t) && pl && pl.model && ((pl.model === 'RDPS' && GM_EXTRA[k]) || (WX_VARS[k] || []).some((v) => pl.gm.includes(v))));
     if (mapQuality === 'high' && fi >= 0 && hours > 0 && hours <= 48) {
       // Progress the field through every hour between the two times, blending between consecutive hours
-      const duration = Math.min(2400, 300 + 140 * hours);
+      const duration = gmLayer ? 450 : Math.min(2400, 300 + 140 * hours);
       const dir = ti > fi ? 1 : -1;
       const t0 = performance.now();
       const n = g.pts.length;
@@ -2719,9 +2816,11 @@
         const pr = Math.min(1, (now - t0) / duration);
         const e = pr < 0.5 ? 2 * pr * pr : 1 - Math.pow(-2 * pr + 2, 2) / 2; // ease in-out
         const pos = fi + dir * e * hours;
-        const a = Math.floor(pos), fr = pos - a;
-        const fa = wxField(Math.max(0, Math.min(g.times.length - 1, a)), def);
-        const fb = wxField(Math.max(0, Math.min(g.times.length - 1, a + 1)), def);
+        let a = Math.floor(pos), fr = pos - a, fa, fb;
+        if (gmLayer) { fa = wxField(fi, def); fb = wxField(ti, def); fr = e; } else {
+          fa = wxField(Math.max(0, Math.min(g.times.length - 1, a)), def);
+          fb = wxField(Math.max(0, Math.min(g.times.length - 1, a + 1)), def);
+        }
         for (let i = 0; i < n; i++) {
           mix.q[i] = fa.q[i] + (fb.q[i] - fa.q[i]) * fr;
           mix.lim[i] = fr < 0.5 ? fa.lim[i] : fb.lim[i];

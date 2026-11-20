@@ -47,6 +47,13 @@ latitude / longitude / elevation format that astrophotography software asks for 
 - Layout: full-height sidebar with its tabs at the top; the header spans the map only and drops items by priority as it narrows
   (badge text → site coordinates → brand name). Resizable sidebar (width remembered), eased transitions and animated expand/collapse
   throughout, last site remembered.
+- **Direct model data (ECCC MSC GeoMet)** — map overlays for cloud cover, temperature, dew point, humidity, wind and gusts come straight
+  from Environment and Climate Change Canada's GeoMet WCS (no key, browser-accessible): **RDPS 10 km** (northern hemisphere, hourly
+  to +84 h) and **GDPS 15 km** (global, to +10 days). One request returns the whole field for the view, so a layer costs one request per
+  hour rather than one call per point, and the overlay is sampled on a much denser lattice. Within RDPS range, **Seeing** and
+  **Transparency** use CMC's astronomy indices (1–5; 0 = too cloudy to rate). Low/mid/high cloud, mist/fog, aerosols and anything
+  beyond GDPS range still come from Open-Meteo; the map caption names the source in use. Requests are paced (≤ 3 at a time, ≥ 250 ms
+  apart) and superseded ones are dropped, per MSC's usage policy.
 - **Open-Meteo usage** — all requests are cached (forecast points on a fixed lattice of at most ~120 points per view and no finer than
   0.1°, per variable, in 7-day windows; aerosol on a shared 0.4° grid) so panning, stepping hours and reloads re-use data; only the
   variables of active layers are fetched. Requests are paced to stay under 400 calls/minute and 4,000/hour from this browser (below the
