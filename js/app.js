@@ -17,7 +17,7 @@
     'wind_speed_300hPa', 'wind_direction_300hPa', 'wind_speed_200hPa'];
   const SM = window.SkyModel;
   const OM = window.OpenMeteo;
-  const APP_VERSION = '1.10.0';
+  const APP_VERSION = '1.11.0';
 
   const state = {
     lat: null, lon: null,
@@ -56,7 +56,31 @@
   map.createPane('lpPane');
   map.getPane('lpPane').style.zIndex = 250;
   map.getPane('lpPane').style.pointerEvents = 'none';
-  const lpLayer = L.tileLayer(window.LightPollution.overlayUrl, {
+  // Atlas image tiles; with "Clear where ideal" each tile is redrawn with alpha by zone (pristine = transparent)
+  const LPTiles = L.TileLayer.extend({
+    createTile(coords, done) {
+      if (!idealClear) return L.TileLayer.prototype.createTile.call(this, coords, done);
+      const size = this.getTileSize();
+      const c = document.createElement('canvas');
+      c.width = size.x; c.height = size.y;
+      const im = new Image();
+      im.crossOrigin = 'anonymous';
+      im.onload = () => {
+        try {
+          const ctx = c.getContext('2d', { willReadFrequently: true });
+          ctx.drawImage(im, 0, 0, c.width, c.height);
+          const img = ctx.getImageData(0, 0, c.width, c.height), d = img.data;
+          for (let o = 0; o < d.length; o += 4) d[o + 3] = Math.min(d[o + 3], window.LightPollution.alphaForRgb(d[o], d[o + 1], d[o + 2]));
+          ctx.putImageData(img, 0, 0);
+          done(null, c);
+        } catch (err) { done(err, c); }
+      };
+      im.onerror = () => done(null, c); // no atlas tile here (ocean / outside coverage): nothing to draw
+      im.src = this.getTileUrl(coords);
+      return c;
+    },
+  });
+  const lpLayer = new LPTiles(window.LightPollution.overlayUrl, {
     pane: 'lpPane',
     minZoom: 2, maxNativeZoom: 8, maxZoom: 19, tileSize: 1024, zoomOffset: -2, opacity: 0.5,
     errorTileUrl: window.LightPollution.errorTile,
@@ -70,6 +94,10 @@
     smoothMapPref = localStorage.getItem('astrosite.smoothMap') === '1';
     smoothDataPref = localStorage.getItem('astrosite.smoothData') === '1';
   } catch (e) { /* ignore */ }
+  // "Clear where ideal": ideal values (no cloud, no wind, perfect seeing, pristine sky…) drawn fully transparent
+  let idealClear = false;
+  try { idealClear = localStorage.getItem('astrosite.idealClear') === '1'; } catch (e) { /* ignore */ }
+  const clearAlpha = (q) => (idealClear ? Math.round(255 * Math.sqrt(Math.max(0, Math.min(1, 1 - q)))) : 255);
   const smoothMap = () => mapQuality === 'high' && smoothMapPref;
   const smoothData = () => mapQuality === 'high' && smoothDataPref;
   const tileLon = (x, z) => (x / Math.pow(2, z)) * 360 - 180;
@@ -79,7 +107,7 @@
       const c = document.createElement('canvas');
       c.width = 256; c.height = 256;
       const z = coords.z;
-      window.LightPollution.renderHQ(c, (px) => tileLon(coords.x + px / 256, z), (py) => tileLat(coords.y + py / 256, z), 256, smoothMap())
+      window.LightPollution.renderHQ(c, (px) => tileLon(coords.x + px / 256, z), (py) => tileLat(coords.y + py / 256, z), 256, smoothMap(), idealClear)
         .then(() => done(null, c), (err) => done(err, c));
       return c;
     },
@@ -97,6 +125,15 @@
     if (on) { lpLayer.addTo(map); if (high) lpHQ.addTo(map); }
   }
   function lpSetOpacity(o) { lpLayer.setOpacity(o); lpHQ.setOpacity(o); }
+  function setIdealClear(on) {
+    idealClear = !!on;
+    try { localStorage.setItem('astrosite.idealClear', idealClear ? '1' : '0'); } catch (e) { /* ignore */ }
+    document.querySelectorAll('.ideal-clear').forEach((x) => { x.checked = idealClear; });
+    if (map.hasLayer(lpLayer)) lpLayer.redraw();
+    if (map.hasLayer(lpHQ)) lpHQ.redraw();
+    if (typeof satLayer !== 'undefined' && map.hasLayer(satLayer)) satLayer.recolour();
+    if (typeof wxActive === 'function' && wxActive()) renderWx();
+  }
 
   let currentBase = baseLayers[savedLayer] ? savedLayer : 'Dark';
   function setBase(name) {
@@ -2197,7 +2234,7 @@
     _colour(tile) {
       if (!tile._bt) return;
       const tf = sfcTempField(), smooth = smoothMap(), night = isNight();
-      const sig = `${tf ? tf.id : '-'}|${smooth}|${night}`;
+      const sig = `${tf ? tf.id : '-'}|${smooth}|${night}|${idealClear}`;
       if (tile._sig === sig) return;
       tile._sig = sig;
       const { x, y, z } = tile._coords;
@@ -2213,14 +2250,15 @@
           for (let yy = py; yy < py + 4; yy++) {
             for (let xx = px; xx < px + 4; xx++) {
               const k = yy * 256 + xx, b = tile._bt[k], o = k * 4;
-              let rgb;
+              let rgb, a = 255;
               if (!isFinite(b) || !isFinite(ts)) rgb = miss;
               else {
                 let q = 1 - irCloud(b, ts);
                 if (!smooth) q = Math.round(q * 10) / 10;
                 rgb = lut[Math.round(q * 100)];
+                a = clearAlpha(q);
               }
-              d[o] = rgb[0]; d[o + 1] = rgb[1]; d[o + 2] = rgb[2]; d[o + 3] = 255;
+              d[o] = rgb[0]; d[o + 1] = rgb[1]; d[o + 2] = rgb[2]; d[o + 3] = a;
             }
           }
         }
@@ -2283,7 +2321,7 @@
             ${row('data-lyr', 'lp', 'Light pollution', 'Light Pollution Atlas 2025 (D. Lorenz)').replace('<tr ', '<tr class="lyr-lp" ')}
             <tr class="lyr-head"><td colspan="2">Forecast <span class="muted">· selected hour</span></td></tr>
             ${WX_KEYS.map((k) => row('data-wx', k, WX_NAMES[k], k === 'cloud' ? 'At the current hour this shows live satellite infrared imagery' : '')).join('')}
-            <tr class="lyr-foot"><td colspan="2"><div class="lyr-foot-in"><label class="chk"><input type="checkbox" class="wx-vals" ${wx.vals ? 'checked' : ''}> Values on top layer</label><a href="${window.LightPollution.colorsUrl}" target="_blank" rel="noopener" title="Light-pollution colour key">LP key</a></div></td></tr>
+            <tr class="lyr-foot"><td colspan="2"><div class="lyr-foot-in"><label class="chk"><input type="checkbox" class="wx-vals" ${wx.vals ? 'checked' : ''}> Values on top layer</label><label class="chk" title="Zero / no effect / ideal values are fully transparent; colour fades in as conditions get worse (missing data stays red)"><input type="checkbox" class="ideal-clear" ${idealClear ? 'checked' : ''}> Clear where ideal</label><a href="${window.LightPollution.colorsUrl}" target="_blank" rel="noopener" title="Light-pollution colour key">LP key</a></div></td></tr>
           </tbody></table>
         </div></div>`;
       L.DomEvent.disableClickPropagation(div);
@@ -2324,6 +2362,7 @@
           if (k === 'cloud') satLayer.setOpacity(o);
         }
       }));
+      div.querySelector('.ideal-clear').addEventListener('change', (e) => setIdealClear(e.target.checked));
       div.querySelector('.wx-vals').addEventListener('change', (e) => {
         wx.vals = e.target.checked;
         try { localStorage.setItem('astrosite.wxVals', wx.vals ? '1' : '0'); } catch (err) { /* ignore */ }
@@ -2709,9 +2748,10 @@
       const img = ctx.createImageData(g.cols, g.rows);
       for (let k = 0; k < g.pts.length; k++) {
         const p = g.pts[k];
+        const bad = f.nd[k] || f.lim[k];
         const rgb = f.nd[k] ? shadeRgb(null, true) : shadeRgb(f.q[k], f.lim[k]);
         const o = (p.r * g.cols + p.c) * 4;
-        img.data[o] = rgb[0]; img.data[o + 1] = rgb[1]; img.data[o + 2] = rgb[2]; img.data[o + 3] = 255;
+        img.data[o] = rgb[0]; img.data[o + 1] = rgb[1]; img.data[o + 2] = rgb[2]; img.data[o + 3] = bad ? 255 : clearAlpha(f.q[k]);
       }
       ctx.putImageData(img, 0, 0);
       return;
@@ -2734,9 +2774,10 @@
         let q = Math.max(0, Math.min(1, crs(v0, v1, v2, v3, ty)));
         if (!smooth) q = Math.round(q * 10) / 10; // stepped colour bands
         const nk = Math.max(0, Math.min(g.rows - 1, Math.round(fy))) * g.cols + Math.max(0, Math.min(g.cols - 1, Math.round(fx)));
-        const rgb = f.nd[nk] || f.lim[nk] ? lutL : lutN[Math.round(q * (LUT - 1))];
+        const bad = f.nd[nk] || f.lim[nk];
+        const rgb = bad ? lutL : lutN[Math.round(q * (LUT - 1))];
         const o = (y * W + x) * 4;
-        img.data[o] = rgb[0]; img.data[o + 1] = rgb[1]; img.data[o + 2] = rgb[2]; img.data[o + 3] = 255;
+        img.data[o] = rgb[0]; img.data[o + 1] = rgb[1]; img.data[o + 2] = rgb[2]; img.data[o + 3] = bad ? 255 : clearAlpha(q);
       }
     }
     ctx.putImageData(img, 0, 0);

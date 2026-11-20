@@ -173,7 +173,32 @@
   }
 
   // Render one 256-px web-mercator tile into a canvas. lonAt(px) / latAt(py) map pixel centres to degrees.
-  async function renderHQ(canvas, lonAt, latAt, size = 256, smooth = false) {
+  // "Clear where ideal": opacity grows with the zone (0 = pristine sky → fully transparent)
+  function zoneIndexAt(x) {
+    const C = ZONE_CENTERS;
+    if (x <= 0) return 0;
+    if (x <= C[0]) return 0;
+    if (x >= C[C.length - 1]) return C.length - 1;
+    let k = 0;
+    while (k < C.length - 2 && x > C[k + 1]) k++;
+    return k + (x - C[k]) / (C[k + 1] - C[k]);
+  }
+  const clearAlphaIdx = (idx) => Math.round(255 * Math.sqrt(Math.max(0, Math.min(1, idx / (ZONE_RGB.length - 1)))));
+  // For the atlas image tiles: exact zone colours → alpha (other colours: nearest zone)
+  const rgbAlphaMemo = new Map();
+  function alphaForRgb(r, g, b) {
+    const key = (r << 16) | (g << 8) | b;
+    let a = rgbAlphaMemo.get(key);
+    if (a === undefined) {
+      let best = Infinity, bi = 0;
+      ZONE_RGB.forEach((z, i) => { const d = (r - z[1]) ** 2 + (g - z[2]) ** 2 + (b - z[3]) ** 2; if (d < best) { best = d; bi = i; } });
+      a = clearAlphaIdx(bi);
+      rgbAlphaMemo.set(key, a);
+    }
+    return a;
+  }
+
+  async function renderHQ(canvas, lonAt, latAt, size = 256, smooth = false, clear = false) {
     const lons = new Float64Array(size), lats = new Float64Array(size);
     for (let i = 0; i < size; i++) { lons[i] = lonAt(i + 0.5); lats[i] = latAt(i + 0.5); }
     const fx = (lon) => mod(lon + 180, 360) * 120 - 0.5;
@@ -234,7 +259,7 @@
           z = ZONE_RGB[ZONE_RGB.length - 1];
           for (let k = 0; k < ZONE_RGB.length; k++) { if (ratio < ZONE_RGB[k][0]) { z = ZONE_RGB[k]; break; } }
         }
-        data[o] = z[1]; data[o + 1] = z[2]; data[o + 2] = z[3]; data[o + 3] = 255;
+        data[o] = z[1]; data[o + 1] = z[2]; data[o + 2] = z[3]; data[o + 3] = clear ? clearAlphaIdx(zoneIndexAt(v)) : 255;
       }
     }
     ctx.putImageData(img, 0, 0);
@@ -244,7 +269,7 @@
   const overlayUrl = `${BASE}/image_tiles/tiles${YEAR}/tile_{z}_{x}_{y}.png`;
   const errorTile = `${BASE}/image_tiles/tiles${YEAR}/black.png`;
 
-  const api = { lookup, renderHQ, _smoothColour: smoothColour, _zoneCenters: ZONE_CENTERS, YEAR, ZONES, overlayUrl, errorTile, infoUrl: `${BASE}/lp/`, colorsUrl: `${BASE}/lp/colors.html`, bortleUrl: `${BASE}/lp/bortle.html` };
+  const api = { lookup, renderHQ, alphaForRgb, _smoothColour: smoothColour, _zoneCenters: ZONE_CENTERS, YEAR, ZONES, overlayUrl, errorTile, infoUrl: `${BASE}/lp/`, colorsUrl: `${BASE}/lp/colors.html`, bortleUrl: `${BASE}/lp/bortle.html` };
   root.LightPollution = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -19,6 +19,9 @@ latitude / longitude / elevation format that astrophotography software asks for 
     Low cloud or fog close to surface temperature can read as clear at night.
     Missing values are drawn red; a layer's button turns red when it has no data at all for the view and hour.
     In High quality, changing the hour animates each layer through every intermediate hour.
+- **Clear where ideal** (Layers panel, remembered) — zero / no-effect / ideal values (no cloud, calm wind, perfect seeing or
+  transparency, pristine sky in the light-pollution atlas…) are drawn fully transparent, and colour fades in as conditions get worse;
+  missing data stays solid red. Applies to every overlay, including the live satellite cloud layer.
 - **Home** tab — every saved location with a **next 24 h** gradient (hour ticks) and a **next 14 nights** gradient (day ticks)
   combining cloud cover, transparency and seeing into one colour; click to open that hour/night. Display preferences,
   **map quality** (High = spline-interpolated light pollution beyond zoom 8 and forecast overlays) with two High-only options —
